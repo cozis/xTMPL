@@ -2,11 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
 #include <ctype.h>
 #include <stdio.h>
 #include "xtmpl.h"
 
-#define MAX_DEPTH 32
+#define MAX_DEPTH 8
 
 typedef enum {
     VK_ERROR,
@@ -206,7 +207,14 @@ static Value eval_primary(EvalContext *ctx)
         long long buff = 0;
         do {
             // TODO: Check overflow
-            buff = buff * 10 + ctx->str[ctx->i] - '0';
+            char u = ctx->str[ctx->i] - '0';
+            
+            if(buff > (LLONG_MAX - u) / 10) {
+                ctx->err = "Overflow";
+                return (Value) {VK_ERROR};
+            }
+
+            buff = buff * 10 + u;
             ctx->i += 1;
         } while(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]));
 
@@ -421,7 +429,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
             
             if(i == len || (!isalpha(tmpl[i]) && tmpl[i] != '_')) {
                 free(arr);
-                *err = "block {%% .. %%} doesn't start with a keyword";
+                *err = "block {% .. %} doesn't start with a keyword";
                 return NULL;
             }
 
@@ -441,7 +449,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
                 
                 if(depth == MAX_DEPTH) {
                     free(arr);
-                    *err = "To many nested if-else and for blocks";
+                    *err = "Too many nested if-else and for blocks";
                     return NULL;
                 }
                 context_stack[depth++] = SEG_IF;
@@ -454,7 +462,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
 
                 if(depth == MAX_DEPTH) {
                     free(arr);
-                    *err = "To many nested if-else and for blocks";
+                    *err = "Too many nested if-else and for blocks";
                     return NULL;
                 }
                 context_stack[depth++] = SEG_FOR;
@@ -467,7 +475,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
 
                 if(depth == 0 || context_stack[depth-1] != SEG_IF) {
                     free(arr);
-                    *err = "{%% else %%} block has no matching {%% if .. %%} block";
+                    *err = "{% else %} has no matching {% if .. %}";
                     return NULL;
                 }
                 break;
@@ -479,7 +487,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
 
                 if(depth == 0 || context_stack[depth-1] != SEG_IF) {
                     free(arr);
-                    *err = "{%% endif %%} block has no matching {%% if .. %%} block";
+                    *err = "{% endif %} has no matching {% if .. %}";
                     return NULL;
                 }
                 depth -= 1;
@@ -492,7 +500,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
 
                 if(depth == 0 || context_stack[depth-1] != SEG_FOR) {
                     free(arr);
-                    *err = "{%% else %%} block has no matching {%% for .. %%} block";
+                    *err = "{% endfor %} has no matching {% for .. %}";
                     return NULL;
                 }
                 depth -= 1;
@@ -500,7 +508,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
 
                 default:
             badkword:
-                *err = "Bad block {%% .. %%} keyword";
+                *err = "Bad {% .. %} block keyword";
                 return NULL;
             }
 
