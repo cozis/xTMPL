@@ -9,19 +9,29 @@
 
 #define MAX_DEPTH 8
 
+typedef struct Value Value;
+
 typedef enum {
     VK_ERROR,
     VK_INT,
-    VK_FLOAT
+    VK_FLOAT,
+    VK_ARRAY,
 } ValueKind;
 
 typedef struct {
+    Value *items;
+    int    count, 
+        capacity;
+} ArrayValue;
+
+struct Value {
     ValueKind kind;
     union {
-        long long as_int;
-        double    as_float;
+        long long  as_int;
+        double     as_float;
+        ArrayValue as_array;
     };
-} Value;
+};
 
 typedef enum {
     OID_ADD,
@@ -37,42 +47,104 @@ typedef struct {
 
 static Value eval(const char *str, long len, const char **err);
 
-static bool print(const char *expr, long len, xt_callback callback, 
-                  void *userp, const char **err)
+static void value_print(Value val, xt_callback callback, void *userp)
 {
-    Value v = eval(expr, len, err);
-    if(v.kind == VK_ERROR)
-        return 0;
+    switch(val.kind) {
 
-    char buff[32];
-    switch(v.kind) {
         case VK_ERROR:
-        /* UNREACHABLE */
-        assert(0);
+        callback("error", 5, userp);
         break;
 
         case VK_INT:
         {
-            int len = snprintf(buff, sizeof(buff), 
-                               "%lld", v.as_int);
+            char buf[32];
+            long len = snprintf(buf, sizeof(buf), 
+                                "%lld", val.as_int);
             assert(len >= 0);
-            callback(buff, len, userp);
+            callback(buf, len, userp);
             break;
         }
 
         case VK_FLOAT:
         {
-            int len = snprintf(buff, sizeof(buff), 
-                               "%lf", v.as_float);
+            char buf[32];
+            long len = snprintf(buf, sizeof(buf), 
+                               "%lf", val.as_float);
             assert(len >= 0);
-            callback(buff, len, userp);
+            callback(buf, len, userp);
+            break;
+        }
+
+        case VK_ARRAY:
+        {
+            callback("[", 1, userp);
+            for(int i = 0; i < val.as_array.count; i += 1) {
+
+                value_print(val.as_array.items[i], callback, userp);
+                if(i+1 < val.as_array.count)
+                    callback(", ", 2, userp);
+            }
+            callback("]", 1, userp);
             break;
         }
     }
+}
+
+static bool print(const char *expr, long len, xt_callback callback, 
+                  void *userp, const char **err)
+{
+    Value val = eval(expr, len, err);
+    if(val.kind == VK_ERROR)
+        return 0;
+
+    value_print(val, callback, userp);
     return 1;
 }
 
-static Value apply(OperatID operat, Value lhs, Value rhs)
+static Value array_new() {
+    Value array;
+    array.kind = VK_ARRAY;
+    array.as_array.capacity = 0;
+    array.as_array.count = 0;
+    array.as_array.items = NULL;
+    return array;
+}
+
+static bool array_append(Value *array, Value item, const char **err)
+{
+    if(array->kind == VK_ERROR || 
+         item.kind == VK_ERROR)
+        return 0;
+
+    if(array->kind != VK_ARRAY) {
+        if(err) 
+            *err = "Can't append to something "
+                   "other than an array";
+        return 0;
+    }
+
+    if(array->as_array.count == array->as_array.capacity) {
+        int capacity2;
+        if(array->as_array.capacity == 0)
+            capacity2 = 32;
+        else
+            capacity2 = 2 * array->as_array.capacity;
+
+        void *addr = realloc(array->as_array.items, capacity2 * sizeof(Value));
+        if(addr == NULL) {
+            if(err)
+                *err = "Out of memory";
+            return 0;
+        }
+        array->as_array.capacity = capacity2;
+        array->as_array.items = addr;
+    }
+
+    array->as_array.items[array->as_array.count++] = item;
+    return 1;
+}
+
+static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
 {
     if(lhs.kind == VK_ERROR)
         return lhs;
@@ -105,6 +177,8 @@ static Value apply(OperatID operat, Value lhs, Value rhs)
                     .as_float = lhs.as_float 
                               + rhs.as_float };
 
+            if(err)
+                *err = "Bad \"+\" operand";
             return (Value) { VK_ERROR };
         }
 
@@ -132,6 +206,8 @@ static Value apply(OperatID operat, Value lhs, Value rhs)
                     .as_float = lhs.as_float 
                               - rhs.as_float };
 
+            if(err)
+                *err = "Bad \"-\" operand";
             return (Value) { VK_ERROR };
         }
 
@@ -159,6 +235,8 @@ static Value apply(OperatID operat, Value lhs, Value rhs)
                     .as_float = lhs.as_float 
                               * rhs.as_float };
 
+            if(err)
+                *err = "Bad \"*\" operand";
             return (Value) { VK_ERROR };
         }
 
@@ -186,9 +264,14 @@ static Value apply(OperatID operat, Value lhs, Value rhs)
                     .as_float = lhs.as_float 
                               / rhs.as_float };
 
+            if(err)
+                *err = "Bad \"/\" operand";
             return (Value) { VK_ERROR };
         }
     }
+
+    /* UNREACHABLE */
+    assert(0);
     return (Value) { VK_ERROR };
 }
 
@@ -196,6 +279,9 @@ static Value eval_inner(EvalContext *ctx);
 
 static Value eval_primary(EvalContext *ctx)
 {
+    while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+        ctx->i += 1;
+
     if(ctx->i == ctx->len) {
         ctx->err = "Expression ended where a primary "
                    "expression was expected";
@@ -237,8 +323,58 @@ static Value eval_primary(EvalContext *ctx)
         }
 
         return (Value) {VK_INT, .as_int = buff};
-    }
     
+    } else if(ctx->str[ctx->i] == '[') {
+
+        ctx->i += 1; // Skip '['
+
+        while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+            ctx->i += 1;
+
+        if(ctx->i == ctx->len) {
+            ctx->err = "Expression ended inside an array";
+            return (Value) {VK_ERROR};
+        }
+
+        Value array = array_new();
+        if(array.kind == VK_ERROR)
+            return array;
+
+        if(ctx->str[ctx->i] != ']')
+            while(1) {
+
+                Value val = eval_inner(ctx);
+                if(val.kind == VK_ERROR)
+                    return val;
+
+                if(!array_append(&array, val, &ctx->err))
+                    return (Value) {VK_ERROR};
+
+                while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+                    ctx->i += 1;
+
+                if(ctx->i == ctx->len) {
+                    ctx->err = "Expression ended inside an array";
+                    return (Value) {VK_ERROR};
+                }
+                
+                if(ctx->str[ctx->i] == ']')
+                    break;
+
+                if(ctx->str[ctx->i] != ',') {
+                    ctx->err = "Unexpected character inside an array";
+                    return (Value) { VK_ERROR };
+                }
+                
+                ctx->i += 1; // Skip ','
+            }
+        
+        assert(ctx->str[ctx->i] == ']');
+        ctx->i += 1; // Skip ']'
+
+        return array;
+    }
+
     ctx->err = "Unexpected character where a primary "
                "expression was expected";
     return (Value) { VK_ERROR };
@@ -246,8 +382,12 @@ static Value eval_primary(EvalContext *ctx)
 
 static bool next_binary_operat(EvalContext *ctx, OperatID *operat)
 {
+    while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+        ctx->i += 1;
+
     if(ctx->i < ctx->len) 
         switch(ctx->str[ctx->i]) {
+        
             case '+':
             ctx->i += 1;
             *operat = OID_ADD;
@@ -326,7 +466,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
             fprintf(stdout, " = ");
         }
 */
-        lhs = apply(operat, lhs, rhs);
+        lhs = apply(operat, lhs, rhs, &ctx->err);
 /*      
         {
             print(stdout, lhs);
@@ -664,23 +804,91 @@ static bool render(RenderContext *ctx, Kind until)
 
             case SEG_FOR:
             {
-                long start = ctx->i;
-                while(1) {
+                // Get the name of the iteration variable.
+                long   k = seg.off;
+                long len = seg.len;
 
-                    const char *expr_str = ctx->tmpl + seg.off;
-                    long        expr_len = seg.len;
+                while(k < len && isspace(ctx->tmpl[k]))
+                    k += 1;
 
-                    Value r = eval(expr_str, expr_len, &ctx->err);
-                    if(r.kind == VK_ERROR) {
-                        assert(ctx->err != NULL);
+                if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
+                    ctx->err = "Missing iteration variable "
+                               "name after for keyword";
+                    return 0;
+                }
+
+                long key_var_off = k;
+                do k += 1;
+                while(k < len && (isalpha(ctx->tmpl[k]) || ctx->tmpl[k] == '_'));
+                long key_var_len = k - key_var_off;
+                
+                while(k < len && isspace(ctx->tmpl[k]))
+                    k += 1;
+
+                if(k == len) {
+                    ctx->err = "for statement ended unexpectedly";
+                    return 0;
+                }
+
+                long val_var_off = 0;
+                long val_var_len = 0;
+                if(ctx->tmpl[k] == ',') {
+
+                    k += 1;
+
+                    while(k < len && isspace(ctx->tmpl[k]))
+                        k += 1;
+                    
+                    if(k == len) {
+                        ctx->err = "for statement ended unexpectedly";
                         return 0;
                     }
 
-                    bool returned_0 = (r.kind == VK_INT && r.as_int == 0);
+                    if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
+                        ctx->err = "Missing second iteration variable after ','";
+                        return 0;
+                    }
 
-                    if(returned_0)
-                        break;
+                    val_var_off = k;
+                    do k += 1; while(k < len && (isalpha(ctx->tmpl[k]) 
+                                             || ctx->tmpl[k] == '_'));
+                    val_var_len = k - val_var_off;   
+                }
 
+                while(k < len && isspace(ctx->tmpl[k]))
+                    k += 1;
+
+                if(k == len) {
+                    ctx->err = "for statement ended unexpectedly";
+                    return 0;
+                }
+                
+                // Now the "in" keyword is expected
+                if(k+2 >= len 
+                    || ctx->tmpl[k]   != 'i' 
+                    || ctx->tmpl[k+1] != 'n' 
+                    || isalpha(ctx->tmpl[k+2]) 
+                    ||  '_' == ctx->tmpl[k+2]) {
+                    ctx->err = "Missing in keyword after "
+                               "iteration variable names";
+                    return 0;
+                }
+
+                k += 2; // Skip the "in"
+
+                const char *coll_str = ctx->tmpl + k;
+                long        coll_len = len - k + seg.off;
+                Value collection = eval(coll_str, coll_len, &ctx->err);
+                if(collection.kind == VK_ERROR)
+                    return 0;
+
+                if(collection.kind != VK_ARRAY) {
+                    ctx->err = "Iterated object is not an array";
+                    return 0;
+                }
+
+                long start = ctx->i;
+                for(int no = 0; no < collection.as_array.count; no += 1) {
                     ctx->i = start;
                     if(!render(ctx, SEG_ENDFOR))
                         return 0;
@@ -746,7 +954,8 @@ bool xtmpl2(const char *tmpl, long len, xt_callback callback, void *userp, const
     };
 
     bool ok = render(&ctx, SEG_END);
-    assert((ok && ctx.err == NULL) || (!ok && ctx.err != NULL));
+    assert((ok && ctx.err == NULL) || 
+          (!ok && ctx.err != NULL));
 
     if(!ok && err != NULL)
         *err = ctx.err;
