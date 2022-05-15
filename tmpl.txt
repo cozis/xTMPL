@@ -1,0 +1,6 @@
+{% if 1 %}
+Hello, world!
+{{1+2}}
+{% else %}
+Ciao, mondo!
+{% endif %}
