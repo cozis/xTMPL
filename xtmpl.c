@@ -689,7 +689,7 @@ static bool render(RenderContext *ctx, Kind until)
             }
 
             case SEG_ELSE:
-            ctx->err = "Orphan {%% else %%} block";
+            ctx->err = "Orphan {% else %}";
             return 0;
 
             case SEG_END:

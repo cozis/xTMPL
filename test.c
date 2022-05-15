@@ -20,18 +20,19 @@ struct {
     {__LINE__, "{% %}",   NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{%@%}",   NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{% @ %}", NULL, "block {% .. %} doesn't start with a keyword"},
+   
     {__LINE__, 
-        "{% if %}{% if %}{% if %}{% if %}"
-        "{% if %}{% if %}{% if %}{% if %}"
-        "{% if %}{% if %}{% if %}{% if %}", 
-        NULL,
-        "Too many nested if-else and for blocks"},
+        .src = "{% if %}{% if %}{% if %}{% if %}"
+               "{% if %}{% if %}{% if %}{% if %}"
+               "{% if %}{% if %}{% if %}{% if %}", 
+        .err = "Too many nested if-else and for blocks"},
+   
     {__LINE__, 
-        "{% for %}{% for %}{% for %}{% for %}"
-        "{% for %}{% for %}{% for %}{% for %}"
-        "{% for %}{% for %}{% for %}{% for %}", 
-        NULL,
-        "Too many nested if-else and for blocks"},
+        .src = "{% for %}{% for %}{% for %}{% for %}"
+               "{% for %}{% for %}{% for %}{% for %}"
+               "{% for %}{% for %}{% for %}{% for %}", 
+        .err = "Too many nested if-else and for blocks"},
+   
     {__LINE__, .src = "{% else %}", .err = "{% else %} has no matching {% if .. %}"},
     {__LINE__, .src = "{% endif %}", .err = "{% endif %} has no matching {% if .. %}"},
     {__LINE__, .src = "{% endfor %}", .err = "{% endfor %} has no matching {% for .. %}"},
@@ -50,6 +51,7 @@ struct {
     {__LINE__, .src = "{{@}}",     .err = "Unexpected character where a primary expression was expected"},
     {__LINE__, .src = "{{ @ }}",   .err = "Unexpected character where a primary expression was expected"},
     {__LINE__, .src = "{{  @  }}", .err = "Unexpected character where a primary expression was expected"},
+    {__LINE__, .src = "{% if 0 %}{% else %}{% else %}", .err = "Orphan {% else %}"},
 };
 
 int main()
