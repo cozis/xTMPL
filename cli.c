@@ -68,7 +68,7 @@ int main()
     }
 
     long   len;
-    char *str = xtmpl(tmpl_str, tmpl_len, &len, &err);
+    char *str = xtmpl(tmpl_str, tmpl_len, NULL, &len, &err);
     if(str == NULL) {
         assert(err != NULL);
         fprintf(stderr, "Error: %s\n", err);

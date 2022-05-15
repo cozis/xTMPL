@@ -9,30 +9,6 @@
 
 #define MAX_DEPTH 8
 
-typedef struct Value Value;
-
-typedef enum {
-    VK_ERROR,
-    VK_INT,
-    VK_FLOAT,
-    VK_ARRAY,
-} ValueKind;
-
-typedef struct {
-    Value *items;
-    int    count, 
-        capacity;
-} ArrayValue;
-
-struct Value {
-    ValueKind kind;
-    union {
-        long long  as_int;
-        double     as_float;
-        ArrayValue as_array;
-    };
-};
-
 typedef enum {
     OID_ADD,
     OID_SUB,
@@ -43,9 +19,10 @@ typedef enum {
 typedef struct {
     const char *err, *str;
     long   prev_i, i, len;
+    Variables *vars;
 } EvalContext;
 
-static Value eval(const char *str, long len, const char **err);
+static Value eval(const char *str, long len, Variables *vars, const char **err);
 
 static void value_print(Value val, xt_callback callback, void *userp)
 {
@@ -90,10 +67,10 @@ static void value_print(Value val, xt_callback callback, void *userp)
     }
 }
 
-static bool print(const char *expr, long len, xt_callback callback, 
+static bool print(const char *expr, long len, Variables *vars, xt_callback callback, 
                   void *userp, const char **err)
 {
-    Value val = eval(expr, len, err);
+    Value val = eval(expr, len, vars, err);
     if(val.kind == VK_ERROR)
         return 0;
 
@@ -288,7 +265,33 @@ static Value eval_primary(EvalContext *ctx)
         return (Value) { VK_ERROR };
     }
 
-    if(isdigit(ctx->str[ctx->i])) {
+    if(isalpha(ctx->str[ctx->i])) {
+
+        long var_off = ctx->i;
+        do ctx->i += 1; while(ctx->i < ctx->len && (isalpha(ctx->str[ctx->i]) || isdigit(ctx->str[ctx->i]) || ctx->str[ctx->i] == '_'));
+        long var_len = ctx->i - var_off;
+
+        // Find variable
+        Value *found = NULL;
+        Variables *vars = ctx->vars;
+        while(found == NULL && vars != NULL) {
+            long j = 0;
+            while(found == NULL && vars->list[j].len > 0) {
+                if(vars->list[j].len == var_len && !strncmp(vars->list[j].name, ctx->str + var_off, var_len))
+                    found = &vars->list[j].value;
+                j += 1;
+            }
+            vars = vars->parent;
+        }
+
+        if(found == NULL) {
+            ctx->err = "Undefined variable";
+            return (Value) {VK_ERROR};
+        }
+
+        return *found;
+
+    } else if(isdigit(ctx->str[ctx->i])) {
 
         long long buff = 0;
         do {
@@ -487,13 +490,14 @@ static Value eval_inner(EvalContext *ctx)
     return eval_expr_1(ctx, eval_primary(ctx), 0);
 }
 
-static Value eval(const char *str, long len, const char **err)
+static Value eval(const char *str, long len, Variables *vars, const char **err)
 {
     EvalContext ctx = {
-        .err = NULL,
-        .str = str,
-        .len = len,
-          .i = 0,
+        .vars = vars,
+         .err = NULL,
+         .str = str,
+         .len = len,
+           .i = 0,
     };
     Value val = eval_inner(&ctx);
     if(val.kind == VK_ERROR)
@@ -530,6 +534,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
     long count = 0;
 
     Kind context_stack[MAX_DEPTH];
+    bool      has_else[MAX_DEPTH];
     int depth = 0;
 
     long i = 0;
@@ -592,6 +597,7 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
                     *err = "Too many nested if-else and for blocks";
                     return NULL;
                 }
+                has_else[depth] = 0;
                 context_stack[depth++] = SEG_IF;
                 break;
 
@@ -605,18 +611,25 @@ static Segment *tokenize(const char *tmpl, long len, const char **err)
                     *err = "Too many nested if-else and for blocks";
                     return NULL;
                 }
+                has_else[depth] = 0;
                 context_stack[depth++] = SEG_FOR;
                 break;
 
                 case 4:
                 if(strncmp(tmpl + kword_off, "else", kword_len))
                     goto badkword;
+
                 seg.kind = SEG_ELSE;
 
                 if(depth == 0 || context_stack[depth-1] != SEG_IF) {
                     free(arr);
                     *err = "{% else %} has no matching {% if .. %}";
                     return NULL;
+                }
+                if(has_else[depth]) {
+                    free(arr);
+                    *err = "Can't have multiple {% else %} blocks";
+                    return 0;
                 }
                 break;
 
@@ -711,6 +724,7 @@ typedef struct {
     const char *tmpl;
     long      i, len;
     Segment    *segs;
+    Variables  *vars;
     void      *userp;
     xt_callback callback;
 } RenderContext;
@@ -761,7 +775,7 @@ static bool render(RenderContext *ctx, Kind until)
             break;
 
             case SEG_EXPR:
-            if(!print(ctx->tmpl + seg.off, seg.len, ctx->callback, ctx->userp, &ctx->err))
+            if(!print(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->callback, ctx->userp, &ctx->err))
                 return 0;
             break;
 
@@ -770,7 +784,7 @@ static bool render(RenderContext *ctx, Kind until)
                 const char *expr_str = ctx->tmpl + seg.off;
                 long        expr_len = seg.len;
 
-                Value r = eval(expr_str, expr_len, &ctx->err);
+                Value r = eval(expr_str, expr_len, ctx->vars, &ctx->err);
                 if(r.kind == VK_ERROR) {
                     assert(ctx->err != NULL);
                     return 0;
@@ -878,7 +892,8 @@ static bool render(RenderContext *ctx, Kind until)
 
                 const char *coll_str = ctx->tmpl + k;
                 long        coll_len = len - k;
-                Value collection = eval(coll_str, coll_len, &ctx->err);
+
+                Value collection = eval(coll_str, coll_len, ctx->vars, &ctx->err);
                 if(collection.kind == VK_ERROR)
                     return 0;
 
@@ -887,20 +902,31 @@ static bool render(RenderContext *ctx, Kind until)
                     return 0;
                 }
 
+                Variables vars = {
+                    ctx->vars,
+                    (Variable[]) {
+                        { ctx->tmpl + key_var_off, key_var_len, { VK_INT, .as_int = 0 }},
+                        { ctx->tmpl + val_var_off, val_var_len, { VK_INT, .as_int = 0 }},
+                        { NULL, 0, { VK_INT, .as_int = 0 }},
+                    }
+                };
+
+                vars.parent = ctx->vars;
+                ctx->vars = &vars;
                 long start = ctx->i;
                 for(int no = 0; no < collection.as_array.count; no += 1) {
+                    vars.list[0].value.as_int = no;
+                    vars.list[1].value = collection.as_array.items[no];
                     ctx->i = start;
                     if(!render(ctx, SEG_ENDFOR))
                         return 0;
                 }
+                ctx->vars = ctx->vars->parent;
                 break;
             }
 
-            case SEG_ELSE:
-            ctx->err = "Orphan {% else %}";
-            return 0;
-
             case SEG_END:
+            case SEG_ELSE:
             case SEG_ENDIF:
             case SEG_ENDFOR:
             /* Unreachable */
@@ -915,7 +941,7 @@ static bool render(RenderContext *ctx, Kind until)
     return 1;
 }
 
-bool xtmpl2(const char *tmpl, long len, xt_callback callback, void *userp, const char **err)
+bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, void *userp, const char **err)
 {
     *err = NULL;
     Segment *segs = tokenize(tmpl, len, err);
@@ -945,6 +971,7 @@ bool xtmpl2(const char *tmpl, long len, xt_callback callback, void *userp, const
 */
     RenderContext ctx = {
              .err = NULL,
+            .vars = vars,
             .segs = segs,
             .tmpl = tmpl,
              .len = len,
@@ -1002,12 +1029,12 @@ static void callback(const char *str, long len, void *userp)
     buff->used += len;
 }
 
-char *xtmpl(const char *tmpl, long len, long *outlen, const char **err)
+char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, const char **err)
 {
     buff_t buff;
     memset(&buff, 0, sizeof(buff_t));
     
-    if(!xtmpl2(tmpl, len, callback, &buff, err)) {
+    if(!xtmpl2(tmpl, len, vars, callback, &buff, err)) {
         free(buff.data);
         return NULL;
     }

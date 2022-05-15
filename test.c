@@ -63,7 +63,7 @@ int main()
         const char *exp = tcases[i].exp;
         const char *exp_err = tcases[i].err;
         const char *err;
-        char *res = xtmpl(src, strlen(src), NULL, &err);
+        char *res = xtmpl(src, strlen(src), NULL, NULL, &err);
         if(exp == NULL && res == NULL) {
         
             // Test was expected to fail and it failed!
