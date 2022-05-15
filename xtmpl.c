@@ -806,7 +806,7 @@ static bool render(RenderContext *ctx, Kind until)
             {
                 // Get the name of the iteration variable.
                 long   k = seg.off;
-                long len = seg.len;
+                long len = seg.off + seg.len;
 
                 while(k < len && isspace(ctx->tmpl[k]))
                     k += 1;
@@ -877,7 +877,7 @@ static bool render(RenderContext *ctx, Kind until)
                 k += 2; // Skip the "in"
 
                 const char *coll_str = ctx->tmpl + k;
-                long        coll_len = len - k + seg.off;
+                long        coll_len = len - k;
                 Value collection = eval(coll_str, coll_len, &ctx->err);
                 if(collection.kind == VK_ERROR)
                     return 0;
