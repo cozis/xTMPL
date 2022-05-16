@@ -8,6 +8,57 @@
 #include <stdio.h>
 #include "xtmpl.h"
 
+typedef enum {
+    SK_TEXT,
+    SK_EXPR,
+    SK_IF,
+    SK_FOR,
+    SK_ELSE,
+    SK_ENDIF,
+    SK_ENDFOR,
+    SK_END,
+} SliceKind;
+
+typedef struct {
+    SliceKind kind;
+    long  off, len;
+} Slice;
+
+typedef struct {
+    long   count, 
+       max_count;
+    Slice list[];
+} Slices;
+
+typedef struct {
+    XT_Error    *err;
+    
+    const char  *str;
+    long         len;
+
+    long   slice_idx;
+    Slices   *slices;
+    Variables  *vars;
+    void      *userp;
+    xt_callback callback;
+} RenderContext;
+
+#define MAX_DEPTH 8
+
+typedef enum {
+    OID_ADD,
+    OID_SUB,
+    OID_MUL,
+    OID_DIV,
+} OperatID;
+
+typedef struct {
+    XT_Error *err;
+    const char *str;
+    long   prev_i, i, len;
+    Variables *vars;
+} EvalContext;
+
 static void report(XT_Error *err, long off, 
                    const char *fmt, ...)
 {
@@ -32,22 +83,6 @@ static void report(XT_Error *err, long off,
         }
     }
 }
-
-#define MAX_DEPTH 8
-
-typedef enum {
-    OID_ADD,
-    OID_SUB,
-    OID_MUL,
-    OID_DIV,
-} OperatID;
-
-typedef struct {
-    XT_Error *err;
-    const char *str;
-    long   prev_i, i, len;
-    Variables *vars;
-} EvalContext;
 
 static Value array_new() {
     Value array;
@@ -196,19 +231,21 @@ static Value eval_primary(EvalContext *ctx)
     if(isalpha(ctx->str[ctx->i])) {
 
         long var_off = ctx->i;
-        do ctx->i += 1; while(ctx->i < ctx->len && (isalpha(ctx->str[ctx->i]) || isdigit(ctx->str[ctx->i]) || ctx->str[ctx->i] == '_'));
+        do 
+            ctx->i += 1; 
+        while(ctx->i < ctx->len && (isalpha(ctx->str[ctx->i]) || 
+                                    isdigit(ctx->str[ctx->i]) || 
+                                    ctx->str[ctx->i] == '_'));
         long var_len = ctx->i - var_off;
 
         // Find variable
         Value *found = NULL;
         Variables *vars = ctx->vars;
         while(found == NULL && vars != NULL) {
-            long j = 0;
-            while(found == NULL && vars->list[j].len > 0) {
+            for(long j = 0; found == NULL && vars->list[j].len > 0; j += 1)
+
                 if(vars->list[j].len == var_len && !strncmp(vars->list[j].name, ctx->str + var_off, var_len))
                     found = &vars->list[j].value;
-                j += 1;
-            }
             vars = vars->parent;
         }
 
@@ -376,7 +413,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
         return lhs;
 
     OperatID operat;
-    long operat_off;
+    long operat_off = ctx->i;
     while(next_binary_operat(ctx, &operat, &operat_off) && preced_of(operat) >= min_preced) {
 
         Value rhs = eval_primary(ctx);
@@ -386,7 +423,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
         }
 
         OperatID operat2;
-        long operat2_off;
+        long operat2_off = ctx->i;
         while(next_binary_operat(ctx, &operat2, &operat2_off) && (preced_of(operat2) > preced_of(operat) || (is_right_assoc(operat2) && preced_of(operat) == preced_of(operat2)))) {
 
             ctx->i = operat2_off;
@@ -430,46 +467,154 @@ static Value eval(const char *str, long len, Variables *vars, XT_Error *err)
            .i = 0,
     };
     Value val = eval_inner(&ctx);
-    if(val.kind == VK_ERROR) {
-        assert(err->occurred);
-    }
+    if(val.kind == VK_ERROR)
+        assert(err == NULL || err->occurred == true);
     return val;
 }
 
-typedef enum {
-    SK_TEXT,
-    SK_EXPR,
-    SK_IF,
-    SK_FOR,
-    SK_ELSE,
-    SK_ENDIF,
-    SK_ENDFOR,
-    SK_END,
-} SliceKind;
+static bool parse_for_statement(const char *str, long len, 
+                               char *var1, char *var2, long var_max, 
+                               long *coll_off, long *coll_len,
+                               XT_Error *err)
+{
+    /* [str] must contain a string in one of the
+     * following forms:
+     *   A    in C
+     *   A, B in C
+     *
+     * where A and B are variable names and C is an
+     * expression.
+     *
+     * Variable names can contain alphabetical 
+     * characters, digits or _, but the first 
+     * character can't be a digit).
+     *
+     * Whitespace between elements must not matter.
+     */
 
-typedef struct {
-    SliceKind kind;
-    long  off, len;
-} Slice;
+    long i = 0;
 
-typedef struct {
-    long   count, 
-       max_count;
-    Slice list[];
-} Slices;
+    // Skip spaces before "A"
+    while(i < len && isspace(str[i]))
+        i += 1;
 
-typedef struct {
-    XT_Error    *err;
+    if(i == len) {
+        report(err, i, "For statement ended unexpectedly");
+        return 0;
+    }
+
+    {
+        // We expect the first character of "A"
+        if(!isalpha(str[i]) && str[i] != '_') {
+            report(err, i, "Missing iteration variable name after [for] keyword");
+            return 0;
+        }
+
+        /* Start of "A" */
+        long key_var_off = i;
+
+        do 
+            i += 1;
+        while(i < len && (isalpha(str[i]) || str[i] == '_'));
+
+        /* End of "A" */
+        long key_var_len = i - key_var_off;
+
+        if(key_var_len > var_max-1) {
+            report(err, key_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
+                (int) key_var_len, str + key_var_off, var_max-1);
+            return 0;
+        }
+
+        memcpy(var1, str + key_var_off, key_var_len);
+        var1[key_var_len] = '\0';
+
+        // TODO: Make sure "A" isn't a keyword.
+    }
+
+    // Skip spaces before "in" or ','
+    while(i < len && isspace(str[i]))
+        i += 1;
+
+    if(i == len) {
+        report(err, i, "For statement ended unexpectedly");
+        return 0;
+    }
+
+    // If now comes either the "in" keyword or
+    // ',' if "B" was also specified.
     
-    const char  *str;
-    long         len;
+    if(str[i] == ',') {
 
-    long   slice_idx;
-    Slices   *slices;
-    Variables  *vars;
-    void      *userp;
-    xt_callback callback;
-} RenderContext;
+        i += 1; // Skip ','
+
+        // Skip spaces before "B"
+        while(i < len && isspace(str[i]))
+            i += 1;
+
+        if(i == len) {
+            report(err, i, "For statement ended unexpectedly");
+            return 0;
+        }
+
+        /* Start of "B" */
+
+        if(!isalpha(str[i]) && str[i] != '_') {
+            report(err, i, "Missing second iteration variable name after ','");
+            return 0;
+        }
+
+        long val_var_off = i;
+        do i += 1; while(i < len && (isalpha(str[i]) 
+                                 || str[i] == '_'));
+        /* End of B */
+        long val_var_len = i - val_var_off;
+
+        if(val_var_len > var_max-1) {
+            report(err, val_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
+                (int) val_var_len, str + val_var_off, var_max-1);
+            return 0;
+        }
+
+        memcpy(var2, str + val_var_off, val_var_len);
+        var2[val_var_len] = '\0';
+    } else {
+        // "B" wasn't specified, just write a null byte
+        // to tell the caller it wasn't specified.
+        if(var_max > 0)
+            var2[0] = '\0';
+    }
+
+    {
+        // Now skip the spaces before the "in" keyword
+        while(i < len && isspace(str[i]))
+            i += 1;
+        
+        if(i == len) {
+            report(err, i, "For statement ended unexpectedly");
+            return 0;
+        }
+
+        // Now the "in" keyword is expected
+        if(i+2 >= len 
+            || str[i]   != 'i' 
+            || str[i+1] != 'n' 
+            || isalpha(str[i+2]) 
+            ||  '_' == str[i+2]) {
+            // NOTE: This may trigger even if there is an
+            // [in] keyword but the statement ends after it.
+            // If that's true, it's not the ideal behaviour.
+            report(err, i, "Missing in keyword after iteration variable names");
+            return 0;
+        }
+
+        i += 2; // Skip "in"
+    }
+
+    *coll_off = i;
+    *coll_len = len - i;
+    return 1;
+}
 
 static void skip_until_or_end(RenderContext *ctx, SliceKind until)
 {
@@ -482,18 +627,11 @@ static void skip_until_or_end(RenderContext *ctx, SliceKind until)
             break;
 
         switch(slice.kind) {
-            case SK_IF:
-            case SK_FOR: 
-            depth += 1; 
-            break;
-            
-            case SK_ENDIF:
-            case SK_ENDFOR:
-            depth -= 1;
-            break;
-
-            default:
-            break;
+            default       : break;
+            case SK_IF    :
+            case SK_FOR   : depth += 1; break;
+            case SK_ENDIF :
+            case SK_ENDFOR: depth -= 1; break;
         }
     }
 }
@@ -582,87 +720,24 @@ static bool render(RenderContext *ctx, SliceKind until)
 
             case SK_FOR:
             {
-                // Get the name of the iteration variable.
-                long   k = slice.off;
-                long len = slice.off + slice.len;
+                char var1[32];
+                char var2[32];
+                assert(sizeof(var1) == sizeof(var2));
 
-                while(k < len && isspace(ctx->str[k]))
-                    k += 1;
-
-                if(k == len) {
-                    report(ctx->err, k, "For statement ended unexpectedly");
+                long coll_off, coll_len;
+                if(!parse_for_statement(ctx->str + slice.off, slice.len, 
+                                        var1, var2, sizeof(var1), 
+                                        &coll_off, &coll_len, ctx->err)) {
+                    if(ctx->err && ctx->err->off >= 0)
+                        ctx->err->off += slice.off;
                     return 0;
                 }
 
-                if(!isalpha(ctx->str[k]) && ctx->str[k] != '_') {
-                    report(ctx->err, k, "Missing iteration variable name after [for] keyword");
-                    return 0;
-                }
-
-                long key_var_off = k;
-                do k += 1;
-                while(k < len && (isalpha(ctx->str[k]) || ctx->str[k] == '_'));
-                long key_var_len = k - key_var_off;
-                
-                while(k < len && isspace(ctx->str[k]))
-                    k += 1;
-
-                if(k == len) {
-                    report(ctx->err, k, "For statement ended unexpectedly");
-                    return 0;
-                }
-
-                long val_var_off = 0;
-                long val_var_len = 0;
-                if(ctx->str[k] == ',') {
-
-                    k += 1;
-
-                    while(k < len && isspace(ctx->str[k]))
-                        k += 1;
-
-                    if(k == len) {
-                        report(ctx->err, k, "For statement ended unexpectedly");
-                        return 0;
-                    }
-
-                    if(!isalpha(ctx->str[k]) && ctx->str[k] != '_') {
-                        report(ctx->err, k, "Missing second iteration variable name after ','");
-                        return 0;
-                    }
-
-                    val_var_off = k;
-                    do k += 1; while(k < len && (isalpha(ctx->str[k]) 
-                                             || ctx->str[k] == '_'));
-                    val_var_len = k - val_var_off;   
-                }
-
-                while(k < len && isspace(ctx->str[k]))
-                    k += 1;
-                
-                if(k == len) {
-                    report(ctx->err, k, "For statement ended unexpectedly");
-                    return 0;
-                }
-
-                // Now the "in" keyword is expected
-                if(k+2 >= len 
-                    || ctx->str[k]   != 'i' 
-                    || ctx->str[k+1] != 'n' 
-                    || isalpha(ctx->str[k+2]) 
-                    ||  '_' == ctx->str[k+2]) {
-                    // NOTE: This may trigger even if there is an
-                    // [in] keyword but the statement ends after it.
-                    // If that's true, it's not the ideal behaviour.
-                    report(ctx->err, k, "Missing in keyword after iteration variable names");
-                    return 0;
-                }
-
-                k += 2; // Skip the "in"
-
-                long        coll_off = k;
-                long        coll_len = len - k;
-                const char *coll_str = ctx->str + k;
+                // Note that [coll_off] is relative to the
+                // for statement body, not the start of the
+                // source string. We need to ass [slice.off]
+                // to use it here.
+                const char *coll_str = ctx->str + slice.off + coll_off;
 
                 Value collection = eval(coll_str, coll_len, ctx->vars, ctx->err);
                 if(collection.kind == VK_ERROR) {
@@ -681,22 +756,36 @@ static bool render(RenderContext *ctx, SliceKind until)
                 Variables vars = {
                     ctx->vars,
                     (Variable[]) {
-                        { ctx->str + key_var_off, key_var_len, { VK_INT, .as_int = 0 }},
-                        { ctx->str + val_var_off, val_var_len, { VK_INT, .as_int = 0 }},
+                        { var1, strlen(var1), { VK_INT, .as_int = 0 }},
+                        { var2, strlen(var2), { VK_INT, .as_int = 0 }},
                         { NULL, 0, { VK_INT, .as_int = 0 }},
                     }
                 };
 
                 vars.parent = ctx->vars;
                 ctx->vars = &vars;
-                long start = ctx->slice_idx;
-                for(int no = 0; no < collection.as_array.count; no += 1) {
-                    vars.list[0].value.as_int = no;
-                    vars.list[1].value = collection.as_array.items[no];
-                    ctx->slice_idx = start;
-                    if(!render(ctx, SK_ENDFOR))
-                        return 0;
+                
+                long count = collection.as_array.count;
+    
+                if(count == 0) {
+
+                    skip_until_or_end(ctx, SK_ENDFOR);
+
+                } else {
+    
+                    long start = ctx->slice_idx;
+                    for(int no = 0; no < count; no += 1) {
+                        
+                        vars.list[0].value.as_int = no;
+                        vars.list[1].value = collection.as_array.items[no];
+
+                        ctx->slice_idx = start;
+                        
+                        if(!render(ctx, SK_ENDFOR))
+                            return 0;
+                    }
                 }
+
                 ctx->vars = ctx->vars->parent;
                 break;
             }
@@ -711,6 +800,8 @@ static bool render(RenderContext *ctx, SliceKind until)
         }
     }
 
+    if(ctx->slice_idx < ctx->slices->count)
+        ctx->slice_idx += 1;
     return 1;
 }
 
