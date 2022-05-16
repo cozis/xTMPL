@@ -51,7 +51,48 @@ typedef struct {
     Variables *vars;
 } EvalContext;
 
-static Value eval(const char *str, long len, Variables *vars, XT_Error *err);
+static Value array_new() {
+    Value array;
+    array.kind = VK_ARRAY;
+    array.as_array.capacity = 0;
+    array.as_array.count = 0;
+    array.as_array.items = NULL;
+    return array;
+}
+
+static bool array_append(Value *array, Value item, const char **err)
+{
+    if(array->kind == VK_ERROR || 
+         item.kind == VK_ERROR)
+        return 0;
+
+    if(array->kind != VK_ARRAY) {
+        if(err) 
+            *err = "Can't append to something "
+                   "other than an array";
+        return 0;
+    }
+
+    if(array->as_array.count == array->as_array.capacity) {
+        int capacity2;
+        if(array->as_array.capacity == 0)
+            capacity2 = 32;
+        else
+            capacity2 = 2 * array->as_array.capacity;
+
+        void *addr = realloc(array->as_array.items, capacity2 * sizeof(Value));
+        if(addr == NULL) {
+            if(err)
+                *err = "Out of memory";
+            return 0;
+        }
+        array->as_array.capacity = capacity2;
+        array->as_array.items = addr;
+    }
+
+    array->as_array.items[array->as_array.count++] = item;
+    return 1;
+}
 
 static void value_print(Value val, xt_callback callback, void *userp)
 {
@@ -94,60 +135,6 @@ static void value_print(Value val, xt_callback callback, void *userp)
             break;
         }
     }
-}
-
-static bool print(const char *expr, long len, Variables *vars, xt_callback callback, 
-                  void *userp, XT_Error *err)
-{
-    Value val = eval(expr, len, vars, err);
-    if(val.kind == VK_ERROR)
-        return 0;
-
-    value_print(val, callback, userp);
-    return 1;
-}
-
-static Value array_new() {
-    Value array;
-    array.kind = VK_ARRAY;
-    array.as_array.capacity = 0;
-    array.as_array.count = 0;
-    array.as_array.items = NULL;
-    return array;
-}
-
-static bool array_append(Value *array, Value item, const char **err)
-{
-    if(array->kind == VK_ERROR || 
-         item.kind == VK_ERROR)
-        return 0;
-
-    if(array->kind != VK_ARRAY) {
-        if(err) 
-            *err = "Can't append to something "
-                   "other than an array";
-        return 0;
-    }
-
-    if(array->as_array.count == array->as_array.capacity) {
-        int capacity2;
-        if(array->as_array.capacity == 0)
-            capacity2 = 32;
-        else
-            capacity2 = 2 * array->as_array.capacity;
-
-        void *addr = realloc(array->as_array.items, capacity2 * sizeof(Value));
-        if(addr == NULL) {
-            if(err)
-                *err = "Out of memory";
-            return 0;
-        }
-        array->as_array.capacity = capacity2;
-        array->as_array.items = addr;
-    }
-
-    array->as_array.items[array->as_array.count++] = item;
-    return 1;
 }
 
 static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
@@ -502,23 +489,10 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
             }
         }
         ctx->i = operat2_off;
-/*
-        {
-            fprintf(stdout, "evaluating: ");
-            print(stdout, lhs);
-            fprintf(stdout, " %s ", operat_text(operat));
-            print(stdout, rhs);
-            fprintf(stdout, " = ");
-        }
-*/
+
         const char *errmsg;
         lhs = apply(operat, lhs, rhs, &errmsg);
-/*      
-        {
-            print(stdout, lhs);
-            fprintf(stdout, "\n");
-        }
-*/
+
         if(lhs.kind == VK_ERROR) {
             assert(!ctx->err->occurred);
             report(ctx->err, operat_off, errmsg);
@@ -622,24 +596,27 @@ static bool render(RenderContext *ctx, Kind until)
             break;
 
             case SEG_EXPR:
-            if(!print(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->callback, ctx->userp, ctx->err)) {
+            {
+                Value val = eval(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->err);
+                if(val.kind == VK_ERROR) {
+                    assert(ctx->err == NULL || 
+                           ctx->err->occurred == true);
 
-                assert(ctx->err == NULL || 
-                       ctx->err->occurred == true);
-
-                // The error offset reported by [print]
-                // is relative to the expression start,
-                // so we need to adjust it to make it
-                // relative to the start of the file.
-                // We need to do it only if there is an
-                // error structure and [print] did report
-                // an error offset (it's not set to a
-                // negative value)
-                if(ctx->err && ctx->err->off >= 0)
-                    ctx->err->off += seg.off;
-                return 0;
+                    // The error offset reported by [print]
+                    // is relative to the expression start,
+                    // so we need to adjust it to make it
+                    // relative to the start of the file.
+                    // We need to do it only if there is an
+                    // error structure and [print] did report
+                    // an error offset (it's not set to a
+                    // negative value)
+                    if(ctx->err && ctx->err->off >= 0)
+                        ctx->err->off += seg.off;
+                    return 0;
+                }
+                value_print(val, ctx->callback, ctx->userp);
+                break;
             }
-            break;
 
             case SEG_IF:
             {
@@ -1028,26 +1005,7 @@ bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, v
         assert(err->occurred);
         return 0;
     }
-/*
-    fprintf(stderr, "# -- Tokens -- #\n");
-    for(int i = 0; segs[i].kind != SEG_END; i += 1) {
-        static const char *map[] = {
-            [SEG_IF] = "if",
-            [SEG_FOR] = "for",
-            [SEG_ELSE] = "else",
-            [SEG_EXPR] = "expr",
-            [SEG_TEXT] = "text",
-            [SEG_ENDIF] = "endif",
-            [SEG_ENDFOR] = "endfor",
-        };
 
-        fprintf(stderr, "%s: [%.*s]\n", 
-            map[segs[i].kind], 
-             (int) segs[i].len, 
-            tmpl + segs[i].off);
-    }
-    fprintf(stderr, "# ------------ #\n");
-*/
     RenderContext ctx = {
              .err = err,
             .vars = vars,
