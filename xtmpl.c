@@ -8,6 +8,43 @@
 #include <stdio.h>
 #include "xtmpl.h"
 
+/*                      OVERVIEW
+ * The templates this engine is able to evaluate are
+ * loosely inspired by Python's Jinja. Similarly to
+ * Jinja, the following constructs are available:
+ *
+ *   {% if <expr> %} .. {% endif %}
+ *
+ *   {% if <expr> %} .. {% else %} .. {% endif %}
+ *
+ *   {% for <var> in <expr> %} .. {% endfor %}
+ *
+ *   {% for <var>, <var> in <expr> %} {% endfor %}
+ *
+ *   {{<expr>}}
+ *
+ * where <expr> represents any expression and 
+ * <var> represents a variable name.
+ *
+ * This templating engine has no concept of precompiling
+ * templates before their evaluation, therefore it
+ * tries to have the lowest possible start-up time.
+ * This is done by evaluating things very lazily so
+ * that only the strinctily necessary things are 
+ * computed. 
+ *
+ * The source is mainly divided in 3 portions:
+ *   1. A "Slicer"
+ *   2. Expression Evaluator
+ *   3. Rendering Routine
+ *
+ * The "Slicer" is implemented by the [slice_up] routine.
+ * Here the template string is scanned and the offsets
+ * of each block are extracted from it. This is the only
+ * preparation phase before the rendering. The output of
+ * the Slicer is an array of slices (an offset-length pair). 
+ * Each slice can have one of the following kinds:
+ */
 typedef enum {
     SK_TEXT,
     SK_EXPR,
@@ -18,6 +55,45 @@ typedef enum {
     SK_ENDFOR,
     SK_END,
 } SliceKind;
+/* SK_TEXT slice refers to basic text that can be
+ * copied directly from the template to the output.
+ * 
+ * SK_EXPR slice refers to the expression inside of 
+ * an {{<expr>}} block, which needs to be evaluated
+ * and printed to the output.
+ *
+ * For every other type, the slice refers to the
+ * inner portion of each {% .. %} block, specifically
+ * the the substring that comes after the keyword
+ * until the ending %}.
+ *
+ * While slicing up the template, checks to ensure
+ * the validity of the block structure are done, like
+ * ensured that each {% if .. %} has an {% endif %} 
+ * and optionally an {% else %}, each {% for .. %}
+ * has an {% endfor %} etc.
+ *
+ * Once the slice array is computed, the "Rendering
+ * Routine" implemented by [render] can be called 
+ * on it to start the execution.
+ * 
+ * The execution basically loops over the slices 
+ * and renders to the ouput of any text or expression 
+ * print blocks, evaluates the expressions inside 
+ * {% if .. %} and {% for .. %} blocks and jumps 
+ * around based on their result, always rendering 
+ * to the output.
+ *
+ * Whenever the rendering routine needs to evaluate 
+ * an expression, it calls the "Rendering Routine" 
+ * implemented by [eval].
+ *
+ * The [eval] function parses and evaluates expressions
+ * on the fly, returning the result to the caller.
+ *
+ * When all of the slices are traversed, the rendering
+ * is complete.
+ */
 
 typedef struct {
     SliceKind kind;
@@ -59,6 +135,7 @@ typedef struct {
     Variables *vars;
 } EvalContext;
 
+/* Reports an error by filling the fields of XT_Error. */
 static void report(XT_Error *err, long off, 
                    const char *fmt, ...)
 {
@@ -178,6 +255,14 @@ static bool array_append(Value *array, Value item, const char **err)
     return 1;
 }
 
+/* Evaluates a binary operation [operat] using as operands
+ * [lhs] and [rhs]. If something went wrong then a value
+ * with type [VK_ERROR] is returned and a description of 
+ * the error is returned through [err].
+ * If either one of [lhs] and [rhs] is of type [VK_ERROR]
+ * then it's returned immediately and no error is reported
+ * through [err].
+ */
 static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
 {
     if(lhs.kind == VK_ERROR) return lhs;
@@ -225,6 +310,11 @@ static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
 
 static Value eval_inner(EvalContext *ctx);
 
+/* Evaluates a "primary expression" AKA an expression with no
+ * binary operators in it. If an error occurres, then a value
+ * of type [VK_ERROR] is returned and the error is reported by
+ * calling [report] on [ctx->err].
+ */
 static Value eval_primary(EvalContext *ctx)
 {
     while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
