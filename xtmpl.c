@@ -1214,7 +1214,8 @@ static char *load_file(const char *file, long *len, const char **err)
 
         long unused = size - used - 1; // -1 for ending \0
         long n = fread(res + used, 1, unused, fp);
-
+        used += n;
+        
         if(n < unused) {
 
             if(ferror(fp))
