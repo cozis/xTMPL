@@ -57,21 +57,22 @@ static char *load_from_stream(FILE *fp, long *out_size, const char **err)
 
 int main()
 {
-    const char *err;
+    const char *errmsg;
     char  *tmpl_str;
     long   tmpl_len;
-    tmpl_str = load_from_stream(stdin, &tmpl_len, &err);
+    tmpl_str = load_from_stream(stdin, &tmpl_len, &errmsg);
     if(tmpl_str == NULL) {
-        assert(err != NULL);
-        fprintf(stderr, "Error: Failed to read input (%s)\n", err);
+        assert(errmsg != NULL);
+        fprintf(stderr, "Error: Failed to read input (%s)\n", errmsg);
         return -1;
     }
 
-    long   len;
+    long len;
+    XT_Error err;
     char *str = xtmpl(tmpl_str, tmpl_len, NULL, &len, &err);
     if(str == NULL) {
-        assert(err != NULL);
-        fprintf(stderr, "Error: %s\n", err);
+        assert(err.occurred);
+        fprintf(stderr, "Error: %s\n", err.message);
         free(tmpl_str);
         return -1;
     }

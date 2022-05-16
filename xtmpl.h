@@ -1,5 +1,14 @@
 #include <stdbool.h>
 
+#define XT_ERRMSG_MAX 256
+
+typedef struct {
+    bool  occurred;
+    bool truncated;
+    long off, row, col;
+    char message[XT_ERRMSG_MAX];
+} XT_Error;
+
 typedef struct Value Value;
 
 typedef enum {
@@ -42,7 +51,7 @@ struct Variables {
 typedef void (*xt_callback)(const char*, long, void*);
 
 bool xtmpl2(const char *tmpl, long len, Variables *vars, 
-            xt_callback callback, void *userp, const char **err);
+            xt_callback callback, void *userp, XT_Error *err);
 
 char *xtmpl(const char *tmpl, long len, Variables *vars,
-            long *outlen, const char **err);
+            long *outlen, XT_Error *err);

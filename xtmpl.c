@@ -3,9 +3,37 @@
 #include <string.h>
 #include <assert.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <stdio.h>
 #include "xtmpl.h"
+
+static void report(XT_Error *err, long off, 
+                   const char *fmt, ...)
+{
+    if(err) {
+        va_list va;
+        va_start(va, fmt);
+        int p = vsnprintf(err->message, 
+                          sizeof(err->message), 
+                          fmt, va);
+        va_end(va);
+        assert(p >= 0);
+        
+        err->off = off;
+        err->col = -1;
+        err->row = -1;
+        err->occurred = true;
+        
+        if(p < (int) sizeof(err->message)) {
+            err->truncated = false;
+            err->message[p] = '\0';
+        } else {
+            err->truncated = true;
+            err->message[sizeof(err->message)-1] = '\0';
+        }
+    }
+}
 
 #define MAX_DEPTH 8
 
@@ -17,12 +45,13 @@ typedef enum {
 } OperatID;
 
 typedef struct {
-    const char *err, *str;
+    XT_Error *err;
+    const char *str;
     long   prev_i, i, len;
     Variables *vars;
 } EvalContext;
 
-static Value eval(const char *str, long len, Variables *vars, const char **err);
+static Value eval(const char *str, long len, Variables *vars, XT_Error *err);
 
 static void value_print(Value val, xt_callback callback, void *userp)
 {
@@ -68,7 +97,7 @@ static void value_print(Value val, xt_callback callback, void *userp)
 }
 
 static bool print(const char *expr, long len, Variables *vars, xt_callback callback, 
-                  void *userp, const char **err)
+                  void *userp, XT_Error *err)
 {
     Value val = eval(expr, len, vars, err);
     if(val.kind == VK_ERROR)
@@ -260,8 +289,8 @@ static Value eval_primary(EvalContext *ctx)
         ctx->i += 1;
 
     if(ctx->i == ctx->len) {
-        ctx->err = "Expression ended where a primary "
-                   "expression was expected";
+        report(ctx->err, ctx->len, "Expression ended where a primary "
+                                   "expression was expected");
         return (Value) { VK_ERROR };
     }
 
@@ -285,7 +314,9 @@ static Value eval_primary(EvalContext *ctx)
         }
 
         if(found == NULL) {
-            ctx->err = "Undefined variable";
+            report(ctx->err, var_off, 
+                "Undefined variable [%.*s]", 
+                var_len, ctx->str + var_off);
             return (Value) {VK_ERROR};
         }
 
@@ -299,7 +330,7 @@ static Value eval_primary(EvalContext *ctx)
             char u = ctx->str[ctx->i] - '0';
             
             if(buff > (LLONG_MAX - u) / 10) {
-                ctx->err = "Overflow";
+                report(ctx->err, ctx->i, "Overflow");
                 return (Value) {VK_ERROR};
             }
 
@@ -335,13 +366,17 @@ static Value eval_primary(EvalContext *ctx)
             ctx->i += 1;
 
         if(ctx->i == ctx->len) {
-            ctx->err = "Expression ended inside an array";
+            report(ctx->err, ctx->len, "expression ended inside of an array");
             return (Value) {VK_ERROR};
         }
 
-        Value array = array_new();
-        if(array.kind == VK_ERROR)
+        const char *errmsg;
+
+        Value array = array_new(&errmsg);
+        if(array.kind == VK_ERROR) {
+            report(ctx->err, ctx->i, errmsg);
             return array;
+        }
 
         if(ctx->str[ctx->i] != ']')
             while(1) {
@@ -350,14 +385,16 @@ static Value eval_primary(EvalContext *ctx)
                 if(val.kind == VK_ERROR)
                     return val;
 
-                if(!array_append(&array, val, &ctx->err))
+                if(!array_append(&array, val, &errmsg)) {
+                    report(ctx->err, ctx->i, errmsg);
                     return (Value) {VK_ERROR};
+                }
 
                 while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
                     ctx->i += 1;
 
                 if(ctx->i == ctx->len) {
-                    ctx->err = "Expression ended inside an array";
+                    report(ctx->err, ctx->i, "Expression ended inside of an array");
                     return (Value) {VK_ERROR};
                 }
                 
@@ -365,7 +402,7 @@ static Value eval_primary(EvalContext *ctx)
                     break;
 
                 if(ctx->str[ctx->i] != ',') {
-                    ctx->err = "Unexpected character inside an array";
+                    report(ctx->err, ctx->i, "Unexpected character [%c] inside of an array", ctx->str[ctx->i]);
                     return (Value) { VK_ERROR };
                 }
                 
@@ -378,12 +415,11 @@ static Value eval_primary(EvalContext *ctx)
         return array;
     }
 
-    ctx->err = "Unexpected character where a primary "
-               "expression was expected";
+    report(ctx->err, ctx->i, "Unexpected character [%c] where a primary expression was expected", ctx->str[ctx->i]);
     return (Value) { VK_ERROR };
 }
 
-static bool next_binary_operat(EvalContext *ctx, OperatID *operat)
+static bool next_binary_operat(EvalContext *ctx, OperatID *operat, long *off)
 {
     while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
         ctx->i += 1;
@@ -392,21 +428,25 @@ static bool next_binary_operat(EvalContext *ctx, OperatID *operat)
         switch(ctx->str[ctx->i]) {
         
             case '+':
+            *off = ctx->i;
             ctx->i += 1;
             *operat = OID_ADD;
             return 1;
             
             case '-':
+            *off = ctx->i;
             ctx->i += 1;
             *operat = OID_SUB;
             return 1;
 
             case '*':
+            *off = ctx->i;
             ctx->i += 1;
             *operat = OID_MUL;
             return 1;
 
             case '/':
+            *off = ctx->i;
             ctx->i += 1;
             *operat = OID_DIV;
             return 1;
@@ -437,29 +477,31 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
         return lhs;
 
     OperatID operat;
-    int prev_i = ctx->i;
-    while(next_binary_operat(ctx, &operat) && preced_of(operat) >= min_preced) {
+    long operat_off;
+    while(next_binary_operat(ctx, &operat, &operat_off) && preced_of(operat) >= min_preced) {
 
         Value rhs = eval_primary(ctx);
-        if(rhs.kind == VK_ERROR)
+        if(rhs.kind == VK_ERROR) {
+            assert(ctx->err->occurred);
             return rhs;
+        }
 
         OperatID operat2;
-        int prev_i_2 = ctx->i;
-        while(next_binary_operat(ctx, &operat2) && (preced_of(operat2) > preced_of(operat) || (is_right_assoc(operat2) && preced_of(operat) == preced_of(operat2)))) {
+        long operat2_off;
+        while(next_binary_operat(ctx, &operat2, &operat2_off) && (preced_of(operat2) > preced_of(operat) || (is_right_assoc(operat2) && preced_of(operat) == preced_of(operat2)))) {
 
-            ctx->i = prev_i_2;
+            ctx->i = operat2_off;
 
             long preced = preced_of(operat) 
                         + (preced_of(operat2) > preced_of(operat));
 
             rhs = eval_expr_1(ctx, rhs, preced);
-            if(rhs.kind == VK_ERROR)
+            if(rhs.kind == VK_ERROR) {
+                assert(ctx->err->occurred);
                 return rhs;
-
-            prev_i_2 = ctx->i;
+            }
         }
-        ctx->i = prev_i_2;
+        ctx->i = operat2_off;
 /*
         {
             fprintf(stdout, "evaluating: ");
@@ -469,19 +511,21 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
             fprintf(stdout, " = ");
         }
 */
-        lhs = apply(operat, lhs, rhs, &ctx->err);
+        const char *errmsg;
+        lhs = apply(operat, lhs, rhs, &errmsg);
 /*      
         {
             print(stdout, lhs);
             fprintf(stdout, "\n");
         }
 */
-        if(lhs.kind == VK_ERROR)
+        if(lhs.kind == VK_ERROR) {
+            assert(!ctx->err->occurred);
+            report(ctx->err, operat_off, errmsg);
             return lhs;
-
-        prev_i = ctx->i;
+        }
     }
-    ctx->i = prev_i;
+    ctx->i = operat_off;
     return lhs;
 }
 
@@ -490,18 +534,19 @@ static Value eval_inner(EvalContext *ctx)
     return eval_expr_1(ctx, eval_primary(ctx), 0);
 }
 
-static Value eval(const char *str, long len, Variables *vars, const char **err)
+static Value eval(const char *str, long len, Variables *vars, XT_Error *err)
 {
     EvalContext ctx = {
         .vars = vars,
-         .err = NULL,
+         .err = err,
          .str = str,
          .len = len,
            .i = 0,
     };
     Value val = eval_inner(&ctx);
-    if(val.kind == VK_ERROR)
-        if(err) *err = ctx.err;
+    if(val.kind == VK_ERROR) {
+        assert(err->occurred);
+    }
     return val;
 }
 
@@ -521,206 +566,8 @@ typedef struct {
     long off, len;
 } Segment;
 
-static Segment *tokenize(const char *tmpl, long len, const char **err)
-{
-    #define SKIP_SPACES()                \
-        while(i < len && (tmpl[i] == ' ' \
-            || tmpl[i] == '\t'           \
-            || tmpl[i] == '\n'))         \
-            i += 1;
-
-    Segment *arr = NULL;
-    long capacity = 32;
-    long count = 0;
-
-    Kind context_stack[MAX_DEPTH];
-    bool      has_else[MAX_DEPTH];
-    int depth = 0;
-
-    long i = 0;
-    do {
-        Segment text;
-        text.kind = SEG_TEXT;
-        text.off = i;
-        while(i < len && (i+1 > len || tmpl[i] != '{' || (tmpl[i+1] != '%' && tmpl[i+1] != '{')))
-            i += 1;
-        text.len = i - text.off;
-        
-        if(text.len > 0) {
-            if(arr == NULL || count == capacity) {
-                capacity *= 2;
-                void *temp = realloc(arr, capacity*sizeof(Segment));
-                if(temp == NULL) {
-                    free(arr);
-                    *err = "Out of memory";
-                    return NULL;
-                }
-                arr = temp;
-            }
-            arr[count++] = text;
-        }
-
-        Segment seg;
-        if(i == len) {
-            seg.kind = SEG_END;
-            seg.off = i;
-            seg.len = 0;
-        } else if(tmpl[i+1] == '%') {
-
-            assert(tmpl[i] == '{' && tmpl[i+1] == '%');
-            i += 2;
-
-            SKIP_SPACES()
-            
-            if(i == len || (!isalpha(tmpl[i]) && tmpl[i] != '_')) {
-                free(arr);
-                *err = "block {% .. %} doesn't start with a keyword";
-                return NULL;
-            }
-
-            long kword_off = i;
-            do
-                i += 1;
-            while(i < len && (isalpha(tmpl[i]) || tmpl[i] == '_'));
-            long kword_len = i - kword_off;
-            
-            SKIP_SPACES()
-
-            switch(kword_len) {
-                case 2:
-                if(strncmp(tmpl + kword_off, "if", kword_len))
-                    goto badkword;
-                seg.kind = SEG_IF;
-                
-                if(depth == MAX_DEPTH) {
-                    free(arr);
-                    *err = "Too many nested if-else and for blocks";
-                    return NULL;
-                }
-                has_else[depth] = 0;
-                context_stack[depth++] = SEG_IF;
-                break;
-
-                case 3:
-                if(strncmp(tmpl + kword_off, "for", kword_len))
-                    goto badkword;
-                seg.kind = SEG_FOR;
-
-                if(depth == MAX_DEPTH) {
-                    free(arr);
-                    *err = "Too many nested if-else and for blocks";
-                    return NULL;
-                }
-                has_else[depth] = 0;
-                context_stack[depth++] = SEG_FOR;
-                break;
-
-                case 4:
-                if(strncmp(tmpl + kword_off, "else", kword_len))
-                    goto badkword;
-
-                seg.kind = SEG_ELSE;
-
-                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
-                    free(arr);
-                    *err = "{% else %} has no matching {% if .. %}";
-                    return NULL;
-                }
-                if(has_else[depth]) {
-                    free(arr);
-                    *err = "Can't have multiple {% else %} blocks";
-                    return 0;
-                }
-                break;
-
-                case 5:
-                if(strncmp(tmpl + kword_off, "endif", kword_len))
-                    goto badkword;
-                seg.kind = SEG_ENDIF;
-
-                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
-                    free(arr);
-                    *err = "{% endif %} has no matching {% if .. %}";
-                    return NULL;
-                }
-                depth -= 1;
-                break;
-
-                case 6:
-                if(strncmp(tmpl + kword_off, "endfor", kword_len))
-                    goto badkword;
-                seg.kind = SEG_ENDFOR;
-
-                if(depth == 0 || context_stack[depth-1] != SEG_FOR) {
-                    free(arr);
-                    *err = "{% endfor %} has no matching {% for .. %}";
-                    return NULL;
-                }
-                depth -= 1;
-                break;
-
-                default:
-            badkword:
-                *err = "Bad {% .. %} block keyword";
-                return NULL;
-            }
-
-            seg.off = i;
-            while(i < len 
-                && (i+1 > len 
-                || tmpl[i] != '%' 
-                || tmpl[i+1] != '}'))
-                i += 1;
-            seg.len = i - seg.off;
-
-            if(i == len)
-                break;
-
-            assert(tmpl[i] == '%' && tmpl[i+1] == '}');
-            i += 2;
-        
-        } else {
-
-            assert(tmpl[i] == '{' && tmpl[i+1] == '{');
-            i += 2;
-
-            SKIP_SPACES()
-
-            seg.kind = SEG_EXPR;
-            seg.off = i;
-            while(i < len 
-                && (i+1 > len 
-                || tmpl[i] != '}' 
-                || tmpl[i+1] != '}'))
-                i += 1;
-            seg.len = i - seg.off;
-            
-            if(i < len) {
-                assert(tmpl[i]   == '}');
-                assert(tmpl[i+1] == '}');
-                i += 2;
-            }
-        }
-
-        if(arr == NULL || count == capacity) {
-            capacity *= 2;
-            void *temp = realloc(arr, capacity*sizeof(Segment));
-            if(temp == NULL) {
-                free(arr);
-                *err = "Out of memory";
-                return NULL;
-            }
-            arr = temp;
-        }
-        arr[count++] = seg;
-
-    } while(arr[count-1].kind != SEG_END);
-
-    return arr;
-}
-
 typedef struct {
-    const char  *err;
+    XT_Error *err;
     const char *tmpl;
     long      i, len;
     Segment    *segs;
@@ -775,8 +622,23 @@ static bool render(RenderContext *ctx, Kind until)
             break;
 
             case SEG_EXPR:
-            if(!print(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->callback, ctx->userp, &ctx->err))
+            if(!print(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->callback, ctx->userp, ctx->err)) {
+
+                assert(ctx->err == NULL || 
+                       ctx->err->occurred == true);
+
+                // The error offset reported by [print]
+                // is relative to the expression start,
+                // so we need to adjust it to make it
+                // relative to the start of the file.
+                // We need to do it only if there is an
+                // error structure and [print] did report
+                // an error offset (it's not set to a
+                // negative value)
+                if(ctx->err && ctx->err->off >= 0)
+                    ctx->err->off += seg.off;
                 return 0;
+            }
             break;
 
             case SEG_IF:
@@ -784,9 +646,17 @@ static bool render(RenderContext *ctx, Kind until)
                 const char *expr_str = ctx->tmpl + seg.off;
                 long        expr_len = seg.len;
 
-                Value r = eval(expr_str, expr_len, ctx->vars, &ctx->err);
+                Value r = eval(expr_str, expr_len, ctx->vars, ctx->err);
                 if(r.kind == VK_ERROR) {
-                    assert(ctx->err != NULL);
+                    
+                    assert(ctx->err == NULL || 
+                           ctx->err->occurred == true);
+
+                    // Like for the SEG_EXPR case, we need
+                    // to fix the error offset reported by
+                    // [eval]
+                    if(ctx->err && ctx->err->off >= 0)
+                        ctx->err->off += seg.off;
                     return 0;
                 }
 
@@ -825,9 +695,13 @@ static bool render(RenderContext *ctx, Kind until)
                 while(k < len && isspace(ctx->tmpl[k]))
                     k += 1;
 
+                if(k == len) {
+                    report(ctx->err, k, "For statement ended unexpectedly");
+                    return 0;
+                }
+
                 if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
-                    ctx->err = "Missing iteration variable "
-                               "name after for keyword";
+                    report(ctx->err, k, "Missing iteration variable name after [for] keyword");
                     return 0;
                 }
 
@@ -840,7 +714,7 @@ static bool render(RenderContext *ctx, Kind until)
                     k += 1;
 
                 if(k == len) {
-                    ctx->err = "for statement ended unexpectedly";
+                    report(ctx->err, k, "For statement ended unexpectedly");
                     return 0;
                 }
 
@@ -852,14 +726,14 @@ static bool render(RenderContext *ctx, Kind until)
 
                     while(k < len && isspace(ctx->tmpl[k]))
                         k += 1;
-                    
+
                     if(k == len) {
-                        ctx->err = "for statement ended unexpectedly";
+                        report(ctx->err, k, "For statement ended unexpectedly");
                         return 0;
                     }
 
                     if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
-                        ctx->err = "Missing second iteration variable after ','";
+                        report(ctx->err, k, "Missing second iteration variable name after ','");
                         return 0;
                     }
 
@@ -871,34 +745,42 @@ static bool render(RenderContext *ctx, Kind until)
 
                 while(k < len && isspace(ctx->tmpl[k]))
                     k += 1;
-
+                
                 if(k == len) {
-                    ctx->err = "for statement ended unexpectedly";
+                    report(ctx->err, k, "For statement ended unexpectedly");
                     return 0;
                 }
-                
+
                 // Now the "in" keyword is expected
                 if(k+2 >= len 
                     || ctx->tmpl[k]   != 'i' 
                     || ctx->tmpl[k+1] != 'n' 
                     || isalpha(ctx->tmpl[k+2]) 
                     ||  '_' == ctx->tmpl[k+2]) {
-                    ctx->err = "Missing in keyword after "
-                               "iteration variable names";
+                    // NOTE: This may trigger even if there is an
+                    // [in] keyword but the statement ends after it.
+                    // If that's true, it's not the ideal behaviour.
+                    report(ctx->err, k, "Missing in keyword after iteration variable names");
                     return 0;
                 }
 
                 k += 2; // Skip the "in"
 
-                const char *coll_str = ctx->tmpl + k;
+                long        coll_off = k;
                 long        coll_len = len - k;
+                const char *coll_str = ctx->tmpl + k;
 
-                Value collection = eval(coll_str, coll_len, ctx->vars, &ctx->err);
-                if(collection.kind == VK_ERROR)
+                Value collection = eval(coll_str, coll_len, ctx->vars, ctx->err);
+                if(collection.kind == VK_ERROR) {
+                    assert(ctx->err == NULL || 
+                           ctx->err->occurred == true);
+                    if(ctx->err && ctx->err->off >= 0)
+                        ctx->err->off += coll_off;
                     return 0;
+                }
 
                 if(collection.kind != VK_ARRAY) {
-                    ctx->err = "Iterated object is not an array";
+                    report(ctx->err, coll_off, "Interation subject isn't an array");
                     return 0;
                 }
 
@@ -941,12 +823,209 @@ static bool render(RenderContext *ctx, Kind until)
     return 1;
 }
 
-bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, void *userp, const char **err)
+static Segment *tokenize(const char *tmpl, long len, XT_Error *err)
 {
-    *err = NULL;
+    #define SKIP_SPACES()                \
+        while(i < len && (tmpl[i] == ' ' \
+            || tmpl[i] == '\t'           \
+            || tmpl[i] == '\n'))         \
+            i += 1;
+
+    #define SKIP_UNTIL_2(X, Y)    \
+        while(i < len             \
+            && (i+1 > len         \
+            || tmpl[i] != (X)     \
+            || tmpl[i+1] != (Y))) \
+            i += 1;
+
+    Segment *arr = NULL;
+    long capacity = 32;
+    long count = 0;
+
+    Kind context_stack[MAX_DEPTH];
+    bool      has_else[MAX_DEPTH];
+    int depth = 0;
+
+    long i = 0;
+    do {
+        Segment text;
+        text.kind = SEG_TEXT;
+        text.off = i;
+        while(i < len && (i+1 > len || tmpl[i] != '{' || (tmpl[i+1] != '%' && tmpl[i+1] != '{')))
+            i += 1;
+        text.len = i - text.off;
+        
+        if(text.len > 0) {
+            if(arr == NULL || count == capacity) {
+
+                capacity *= 2;
+
+                void *temp = realloc(arr, capacity*sizeof(Segment));
+                if(temp == NULL) {
+                    
+                    free(arr);
+
+                    report(err, i, "Out of memory");
+                    return NULL;
+                }
+                arr = temp;
+            }
+            arr[count++] = text;
+        }
+
+        Segment seg;
+        if(i == len) {
+            seg.kind = SEG_END;
+            seg.off = i;
+            seg.len = 0;
+        } else if(tmpl[i+1] == '%') {
+
+            long block_off = i;
+
+            assert(tmpl[i] == '{' && tmpl[i+1] == '%');
+            i += 2;
+
+            SKIP_SPACES()
+            
+            if(i == len || (!isalpha(tmpl[i]) && tmpl[i] != '_')) {
+                free(arr);
+                report(err, block_off, "block {% .. %} doesn't start with a keyword");
+                return NULL;
+            }
+
+            long kword_off = i;
+            do
+                i += 1;
+            while(i < len && (isalpha(tmpl[i]) || tmpl[i] == '_'));
+            long kword_len = i - kword_off;
+            
+            switch(kword_len) {
+                case 2:
+                if(strncmp(tmpl + kword_off, "if", kword_len))
+                    goto badkword;
+                seg.kind = SEG_IF;
+                
+                if(depth == MAX_DEPTH) {
+                    free(arr);
+                    report(err, block_off, "Too many nested {% if .. %} and {% for .. %} blocks");
+                    return NULL;
+                }
+                has_else[depth] = 0;
+                context_stack[depth++] = SEG_IF;
+                break;
+
+                case 3:
+                if(strncmp(tmpl + kword_off, "for", kword_len))
+                    goto badkword;
+                seg.kind = SEG_FOR;
+
+                if(depth == MAX_DEPTH) {
+                    free(arr);
+                    report(err, block_off, "Too many nested {% if .. %} and {% for .. %} blocks");
+                    return NULL;
+                }
+                has_else[depth] = 0;
+                context_stack[depth++] = SEG_FOR;
+                break;
+
+                case 4:
+                if(strncmp(tmpl + kword_off, "else", kword_len))
+                    goto badkword;
+
+                seg.kind = SEG_ELSE;
+
+                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
+                    free(arr);
+                    report(err, block_off, "{% else %} has no matching {% if .. %}");
+                    return NULL;
+                }
+                if(has_else[depth]) {
+                    free(arr);
+                    report(err, block_off, "Can't have multiple {% else %} block relative to one {% if .. %}");
+                    return 0;
+                }
+                break;
+
+                case 5:
+                if(strncmp(tmpl + kword_off, "endif", kword_len))
+                    goto badkword;
+                seg.kind = SEG_ENDIF;
+
+                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
+                    free(arr);
+                    report(err, block_off, "{% endif %} has no matching {% if .. %}");
+                    return NULL;
+                }
+                depth -= 1;
+                break;
+
+                case 6:
+                if(strncmp(tmpl + kword_off, "endfor", kword_len))
+                    goto badkword;
+                seg.kind = SEG_ENDFOR;
+
+                if(depth == 0 || context_stack[depth-1] != SEG_FOR) {
+                    free(arr);
+                    report(err, block_off, "{% endfor %} has no matching {% for .. %}");
+                    return NULL;
+                }
+                depth -= 1;
+                break;
+
+                default:
+            badkword:
+                free(arr);
+                report(err, kword_off, "Bad {% .. %} block keyword");
+                return NULL;
+            }
+
+            seg.off = i;
+            SKIP_UNTIL_2('%', '}')
+            seg.len = i - seg.off;
+
+            if(i == len)
+                break;
+
+            assert(tmpl[i] == '%' && tmpl[i+1] == '}');
+            i += 2;
+        
+        } else {
+
+            assert(tmpl[i] == '{' && tmpl[i+1] == '{');
+            i += 2;
+
+            seg.kind = SEG_EXPR;
+            seg.off = i;
+            SKIP_UNTIL_2('}', '}')
+            seg.len = i - seg.off;
+            
+            if(i < len)
+                i += 2; // Skip "}}"
+        }
+
+        if(arr == NULL || count == capacity) {
+            capacity *= 2;
+            void *temp = realloc(arr, capacity*sizeof(Segment));
+            if(temp == NULL) {
+                free(arr);
+                report(err, i, "Out of memory");
+                return NULL;
+            }
+            arr = temp;
+        }
+        arr[count++] = seg;
+
+    } while(arr[count-1].kind != SEG_END);
+
+    return arr;
+}
+
+bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, void *userp, XT_Error *err)
+{
+    memset(err, 0, sizeof(XT_Error));
     Segment *segs = tokenize(tmpl, len, err);
     if(segs == NULL) {
-        assert(*err != NULL);
+        assert(err->occurred);
         return 0;
     }
 /*
@@ -970,7 +1049,7 @@ bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, v
     fprintf(stderr, "# ------------ #\n");
 */
     RenderContext ctx = {
-             .err = NULL,
+             .err = err,
             .vars = vars,
             .segs = segs,
             .tmpl = tmpl,
@@ -981,11 +1060,8 @@ bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, v
     };
 
     bool ok = render(&ctx, SEG_END);
-    assert((ok && ctx.err == NULL) || 
-          (!ok && ctx.err != NULL));
-
-    if(!ok && err != NULL)
-        *err = ctx.err;
+    assert((ok && err->occurred == false) || 
+          (!ok && err->occurred == true));
 
     free(segs);
     return ok;
@@ -1029,7 +1105,7 @@ static void callback(const char *str, long len, void *userp)
     buff->used += len;
 }
 
-char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, const char **err)
+char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, XT_Error *err)
 {
     buff_t buff;
     memset(&buff, 0, sizeof(buff_t));
@@ -1040,7 +1116,7 @@ char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, const cha
     }
 
     if(buff.failed) {
-        *err = "Out of memory";
+        report(err, -1, "Out of memory");
         free(buff.data);
         return NULL;
     }
@@ -1052,7 +1128,7 @@ char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, const cha
         
         out_str = malloc(1);
         if(out_str == NULL) {
-            *err = "Out of memory";
+            report(err, -1, "Out of memory");
             return NULL;
         }
         out_len = 0;

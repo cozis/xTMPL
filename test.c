@@ -62,13 +62,13 @@ int main()
         const char *src = tcases[i].src;
         const char *exp = tcases[i].exp;
         const char *exp_err = tcases[i].err;
-        const char *err;
+        XT_Error err;
         char *res = xtmpl(src, strlen(src), NULL, NULL, &err);
         if(exp == NULL && res == NULL) {
         
             // Test was expected to fail and it failed!
             
-            if(!strcmp(err, exp_err)) {
+            if(!strcmp(err.message, exp_err)) {
 
                 fprintf(stderr, "Test %d: Passed\n", i+1);
                 passed += 1;
@@ -82,7 +82,7 @@ int main()
                     "\tfailed with error:\n"
                     "\t\t%s\n"
                     "\tbut it was expected to fail with error:\n"
-                    "\t\t%s\n", i+1, src, err, exp_err);
+                    "\t\t%s\n", i+1, src, err.message, exp_err);
             }
 
         } else if(exp == NULL && res != NULL) {
@@ -110,7 +110,7 @@ int main()
                 "\tfailed. It should have rendered:\n"
                 "\t\t%s\n"
                 "\tThe reported error is:\n"
-                "\t\t%s\n", i+1, src, exp, err);
+                "\t\t%s\n", i+1, src, exp, err.message);
 
             free(res);
 
