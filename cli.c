@@ -69,7 +69,7 @@ int main()
 
     long len;
     XT_Error err;
-    char *str = xtmpl(tmpl_str, tmpl_len, NULL, &len, &err);
+    char *str = xt_render_str_to_str(tmpl_str, tmpl_len, NULL, &len, &err);
     if(str == NULL) {
         assert(err.occurred);
         fprintf(stderr, "Error: %s\n", err.message);

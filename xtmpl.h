@@ -50,8 +50,7 @@ struct Variables {
 
 typedef void (*xt_callback)(const char*, long, void*);
 
-bool xtmpl2(const char *str, long len, Variables *vars, 
-            xt_callback callback, void *userp, XT_Error *err);
-
-char *xtmpl(const char *str, long len, Variables *vars,
-            long *outlen, XT_Error *err);
+bool  xt_render_str_to_cb  (const char *str, long len, Variables *vars, xt_callback callback, void *userp, XT_Error *err);
+bool  xt_render_file_to_cb (const char *file,          Variables *vars, xt_callback callback, void *userp, XT_Error *err);
+char *xt_render_str_to_str (const char *str, long len, Variables *vars, long *outlen, XT_Error *err);
+char *xt_render_file_to_str(const char *file,          Variables *vars, long *outlen, XT_Error *err);

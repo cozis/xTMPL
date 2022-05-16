@@ -84,47 +84,12 @@ static void report(XT_Error *err, long off,
     }
 }
 
-static Value array_new() {
-    Value array;
-    array.kind = VK_ARRAY;
-    array.as_array.capacity = 0;
-    array.as_array.count = 0;
-    array.as_array.items = NULL;
-    return array;
-}
-
-static bool array_append(Value *array, Value item, const char **err)
+static void value_free(Value *val)
 {
-    if(array->kind == VK_ERROR || 
-         item.kind == VK_ERROR)
-        return 0;
-
-    if(array->kind != VK_ARRAY) {
-        if(err) 
-            *err = "Can't append to something "
-                   "other than an array";
-        return 0;
+    switch(val->kind) {
+        default:break;
+        case VK_ARRAY: free(val->as_array.items); break;
     }
-
-    if(array->as_array.count == array->as_array.capacity) {
-        int capacity2;
-        if(array->as_array.capacity == 0)
-            capacity2 = 32;
-        else
-            capacity2 = 2 * array->as_array.capacity;
-
-        void *addr = realloc(array->as_array.items, capacity2 * sizeof(Value));
-        if(addr == NULL) {
-            if(err)
-                *err = "Out of memory";
-            return 0;
-        }
-        array->as_array.capacity = capacity2;
-        array->as_array.items = addr;
-    }
-
-    array->as_array.items[array->as_array.count++] = item;
-    return 1;
 }
 
 static void value_print(Value val, xt_callback callback, void *userp)
@@ -168,6 +133,49 @@ static void value_print(Value val, xt_callback callback, void *userp)
             break;
         }
     }
+}
+
+static Value array_new() {
+    Value array;
+    array.kind = VK_ARRAY;
+    array.as_array.capacity = 0;
+    array.as_array.count = 0;
+    array.as_array.items = NULL;
+    return array;
+}
+
+static bool array_append(Value *array, Value item, const char **err)
+{
+    if(array->kind == VK_ERROR || 
+         item.kind == VK_ERROR)
+        return 0;
+
+    if(array->kind != VK_ARRAY) {
+        if(err) 
+            *err = "Can't append to something "
+                   "other than an array";
+        return 0;
+    }
+
+    if(array->as_array.count == array->as_array.capacity) {
+        int capacity2;
+        if(array->as_array.capacity == 0)
+            capacity2 = 32;
+        else
+            capacity2 = 2 * array->as_array.capacity;
+
+        void *addr = realloc(array->as_array.items, capacity2 * sizeof(Value));
+        if(addr == NULL) {
+            if(err)
+                *err = "Out of memory";
+            return 0;
+        }
+        array->as_array.capacity = capacity2;
+        array->as_array.items = addr;
+    }
+
+    array->as_array.items[array->as_array.count++] = item;
+    return 1;
 }
 
 static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
@@ -671,6 +679,7 @@ static bool render(RenderContext *ctx, SliceKind until)
                     return 0;
                 }
                 value_print(val, ctx->callback, ctx->userp);
+                value_free(&val);
                 break;
             }
 
@@ -693,6 +702,8 @@ static bool render(RenderContext *ctx, SliceKind until)
                 }
 
                 bool returned_0 = (r.kind == VK_INT && r.as_int == 0);
+
+                value_free(&r);
 
                 if(!returned_0) {
                     
@@ -767,11 +778,9 @@ static bool render(RenderContext *ctx, SliceKind until)
                 
                 long count = collection.as_array.count;
     
-                if(count == 0) {
-
+                if(count == 0)
                     skip_until_or_end(ctx, SK_ENDFOR);
-
-                } else {
+                else {
     
                     long start = ctx->slice_idx;
                     for(int no = 0; no < count; no += 1) {
@@ -781,11 +790,15 @@ static bool render(RenderContext *ctx, SliceKind until)
 
                         ctx->slice_idx = start;
                         
-                        if(!render(ctx, SK_ENDFOR))
+                        if(!render(ctx, SK_ENDFOR)) {
+                            value_free(&collection);
                             return 0;
+                        }
                     }
                 }
-
+                value_free(&collection);
+                value_free(&vars.list[0].value);
+                value_free(&vars.list[1].value);
                 ctx->vars = ctx->vars->parent;
                 break;
             }
@@ -1033,8 +1046,8 @@ failed:
     return NULL;
 }
 
-bool xtmpl2(const char *str, long len, Variables *vars, 
-            xt_callback callback, void *userp, XT_Error *err)
+bool xt_render_str_to_cb(const char *str, long len, Variables *vars, 
+                              xt_callback callback, void *userp, XT_Error *err)
 {
     if(str == NULL)
         str = "";
@@ -1053,13 +1066,13 @@ bool xtmpl2(const char *str, long len, Variables *vars,
     }
 
     RenderContext ctx = {
-             .err = err,
-            .vars = vars,
-          .slices = slices,
-             .str = str,
-             .len = len,
-       .slice_idx = 0,
-           .userp = userp,
+        .err = err,
+        .vars = vars,
+        .str = str,
+        .len = len,
+        .slices = slices,
+        .slice_idx = 0,
+        .userp = userp,
         .callback = callback,
     };
 
@@ -1136,12 +1149,12 @@ static void callback(const char *str, long len, void *userp)
     buff->used += len;
 }
 
-char *xtmpl(const char *str, long len, Variables *vars, long *outlen, XT_Error *err)
+char *xt_render_str_to_str(const char *str, long len, Variables *vars, long *outlen, XT_Error *err)
 {
     buff_t buff;
     memset(&buff, 0, sizeof(buff_t));
     
-    if(!xtmpl2(str, len, vars, callback, &buff, err)) {
+    if(!xt_render_str_to_cb(str, len, vars, callback, &buff, err)) {
         free(buff.data);
         return NULL;
     }
@@ -1175,4 +1188,84 @@ char *xtmpl(const char *str, long len, Variables *vars, long *outlen, XT_Error *
     if(outlen)
         *outlen = out_len;
     return out_str;
+}
+
+static char *load_file(const char *file, long *len, const char **err)
+{
+    FILE *fp  = NULL;
+    char *res = NULL;
+    long size = 1024, used = 0;
+
+    fp = fopen(file, "rb");
+    if(fp == NULL) {
+        *err = "Couldn't open file";
+        goto failed;
+    }
+
+    while(1) {
+
+        size *= 2;
+        void *p = realloc(res, size);
+        if(p == NULL) {
+            *err = "Out of memory";
+            goto failed;
+        }
+        res = p;
+
+        long unused = size - used - 1; // -1 for ending \0
+        long n = fread(res + used, 1, unused, fp);
+
+        if(n < unused) {
+
+            if(ferror(fp))
+                goto failed;
+
+            break;
+        }
+    }
+    res[used] = '\0';
+    *len = used;
+    fclose(fp);
+    return res;
+
+failed:
+    assert(*err != NULL);
+    if(fp != NULL)
+        fclose(fp);
+    free(res);
+    return NULL;
+}
+
+bool xt_render_file_to_cb(const char *file, Variables *vars, 
+                               xt_callback callback, void *userp, XT_Error *err)
+{
+    long len;
+    const char *errmsg;
+    char *str = load_file(file, &len, &errmsg);
+    if(str == NULL) {
+        report(err, 0, "%s", errmsg);
+        return 0;
+    }
+
+    bool ok = xt_render_str_to_cb(str, len, vars, callback, userp, err);
+
+    free(str);
+    return ok;
+}
+
+char *xt_render_file_to_str(const char *file, Variables *vars, 
+                                 long *outlen, XT_Error *err)
+{
+    long len;
+    const char *errmsg;
+    char *str = load_file(file, &len, &errmsg);
+    if(str == NULL) {
+        report(err, 0, "%s", errmsg);
+        return 0;
+    }
+
+    char *res = xt_render_str_to_str(str, len, vars, outlen, err);
+
+    free(str);
+    return res;
 }
