@@ -14,9 +14,7 @@ static void report(XT_Error *err, long off,
     if(err) {
         va_list va;
         va_start(va, fmt);
-        int p = vsnprintf(err->message, 
-                          sizeof(err->message), 
-                          fmt, va);
+        int p = vsnprintf(err->message, sizeof(err->message), fmt, va);
         va_end(va);
         assert(p >= 0);
         
@@ -361,7 +359,7 @@ static Value eval_primary(EvalContext *ctx)
 
         Value array = array_new(&errmsg);
         if(array.kind == VK_ERROR) {
-            report(ctx->err, ctx->i, errmsg);
+            report(ctx->err, ctx->i, "%s", errmsg);
             return array;
         }
 
@@ -373,7 +371,7 @@ static Value eval_primary(EvalContext *ctx)
                     return val;
 
                 if(!array_append(&array, val, &errmsg)) {
-                    report(ctx->err, ctx->i, errmsg);
+                    report(ctx->err, ctx->i, "%s", errmsg);
                     return (Value) {VK_ERROR};
                 }
 
@@ -495,7 +493,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
 
         if(lhs.kind == VK_ERROR) {
             assert(!ctx->err->occurred);
-            report(ctx->err, operat_off, errmsg);
+            report(ctx->err, operat_off, "%s", errmsg);
             return lhs;
         }
     }
@@ -525,54 +523,58 @@ static Value eval(const char *str, long len, Variables *vars, XT_Error *err)
 }
 
 typedef enum {
-    SEG_TEXT,
-    SEG_EXPR,
-    SEG_IF,
-    SEG_FOR,
-    SEG_ELSE,
-    SEG_ENDIF,
-    SEG_ENDFOR,
-    SEG_END,
-} Kind;
+    SK_TEXT,
+    SK_EXPR,
+    SK_IF,
+    SK_FOR,
+    SK_ELSE,
+    SK_ENDIF,
+    SK_ENDFOR,
+    SK_END,
+} SliceKind;
 
 typedef struct {
-    Kind kind;
-    long off, len;
-} Segment;
+    SliceKind kind;
+    long  off, len;
+} Slice;
 
 typedef struct {
-    XT_Error *err;
-    const char *tmpl;
-    long      i, len;
-    Segment    *segs;
+    long   count, 
+       max_count;
+    Slice list[];
+} Slices;
+
+typedef struct {
+    XT_Error    *err;
+    
+    const char  *str;
+    long         len;
+
+    long   slice_idx;
+    Slices   *slices;
     Variables  *vars;
     void      *userp;
     xt_callback callback;
 } RenderContext;
 
-static void skip_until_or_end(RenderContext *ctx, Kind until)
+static void skip_until_or_end(RenderContext *ctx, SliceKind until)
 {
     int depth = 0;
-    while(1) {
-        Segment seg = ctx->segs[ctx->i];
-        ctx->i += 1;
+    while(ctx->slice_idx < ctx->slices->count) {
+        
+        Slice slice = ctx->slices->list[ctx->slice_idx++];
 
-        if(seg.kind == SEG_END) {
-            ctx->i -= 1;
-            break;
-        }
-
-        if(depth == 0 && seg.kind == until)
+        if(depth == 0 && slice.kind == until)
             break;
 
-        switch(seg.kind) {
-            case SEG_IF:
-            case SEG_FOR: 
+        switch(slice.kind) {
+            case SK_IF:
+            case SK_FOR: 
             depth += 1; 
             break;
             
-            case SEG_ENDIF:
-            case SEG_ENDFOR:
+            case SK_ENDIF:
+            case SK_ENDFOR:
             depth -= 1;
             break;
 
@@ -582,22 +584,24 @@ static void skip_until_or_end(RenderContext *ctx, Kind until)
     }
 }
 
-static bool render(RenderContext *ctx, Kind until)
+static bool render(RenderContext *ctx, SliceKind until)
 {
-    while(ctx->segs[ctx->i].kind != until && ctx->segs[ctx->i].kind != SEG_END) {
+    while(ctx->slice_idx < ctx->slices->count && 
+          ctx->slices->list[ctx->slice_idx].kind != until) {
 
-        Segment seg = ctx->segs[ctx->i];
-        ctx->i += 1;
+        Slice slice = ctx->slices->list[ctx->slice_idx++];
 
-        switch(seg.kind) {
+        switch(slice.kind) {
             
-            case SEG_TEXT:
-            ctx->callback(ctx->tmpl + seg.off, seg.len, ctx->userp);
+            case SK_TEXT:
+            ctx->callback(ctx->str + slice.off, slice.len, ctx->userp);
             break;
 
-            case SEG_EXPR:
+            case SK_EXPR:
             {
-                Value val = eval(ctx->tmpl + seg.off, seg.len, ctx->vars, ctx->err);
+                Value val = eval(ctx->str + slice.off, slice.len, 
+                                 ctx->vars, ctx->err);
+
                 if(val.kind == VK_ERROR) {
                     assert(ctx->err == NULL || 
                            ctx->err->occurred == true);
@@ -611,29 +615,28 @@ static bool render(RenderContext *ctx, Kind until)
                     // an error offset (it's not set to a
                     // negative value)
                     if(ctx->err && ctx->err->off >= 0)
-                        ctx->err->off += seg.off;
+                        ctx->err->off += slice.off;
                     return 0;
                 }
                 value_print(val, ctx->callback, ctx->userp);
                 break;
             }
 
-            case SEG_IF:
+            case SK_IF:
             {
-                const char *expr_str = ctx->tmpl + seg.off;
-                long        expr_len = seg.len;
+                Value r = eval(ctx->str + slice.off, slice.len, 
+                               ctx->vars, ctx->err);
 
-                Value r = eval(expr_str, expr_len, ctx->vars, ctx->err);
                 if(r.kind == VK_ERROR) {
                     
                     assert(ctx->err == NULL || 
                            ctx->err->occurred == true);
 
-                    // Like for the SEG_EXPR case, we need
+                    // Like for the SK_EXPR case, we need
                     // to fix the error offset reported by
                     // [eval]
                     if(ctx->err && ctx->err->off >= 0)
-                        ctx->err->off += seg.off;
+                        ctx->err->off += slice.off;
                     return 0;
                 }
 
@@ -644,32 +647,32 @@ static bool render(RenderContext *ctx, Kind until)
                     /* -- Took the IF branch -- */
                     
                     // Execute until the {% else %}
-                    if(!render(ctx, SEG_ELSE))
+                    if(!render(ctx, SK_ELSE))
                         return 0;
 
                     // Now skip to the token after the {% endif %}
-                    skip_until_or_end(ctx, SEG_ENDIF);
+                    skip_until_or_end(ctx, SK_ENDIF);
 
                 } else {
 
                     /* -- Took the ELSE branch -- */
 
                     // Now skip to the token after the {% else %}
-                    skip_until_or_end(ctx, SEG_ELSE);
+                    skip_until_or_end(ctx, SK_ELSE);
 
-                    if(!render(ctx, SEG_ENDIF))
+                    if(!render(ctx, SK_ENDIF))
                         return 0;
                 }
                 break;
             }
 
-            case SEG_FOR:
+            case SK_FOR:
             {
                 // Get the name of the iteration variable.
-                long   k = seg.off;
-                long len = seg.off + seg.len;
+                long   k = slice.off;
+                long len = slice.off + slice.len;
 
-                while(k < len && isspace(ctx->tmpl[k]))
+                while(k < len && isspace(ctx->str[k]))
                     k += 1;
 
                 if(k == len) {
@@ -677,17 +680,17 @@ static bool render(RenderContext *ctx, Kind until)
                     return 0;
                 }
 
-                if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
+                if(!isalpha(ctx->str[k]) && ctx->str[k] != '_') {
                     report(ctx->err, k, "Missing iteration variable name after [for] keyword");
                     return 0;
                 }
 
                 long key_var_off = k;
                 do k += 1;
-                while(k < len && (isalpha(ctx->tmpl[k]) || ctx->tmpl[k] == '_'));
+                while(k < len && (isalpha(ctx->str[k]) || ctx->str[k] == '_'));
                 long key_var_len = k - key_var_off;
                 
-                while(k < len && isspace(ctx->tmpl[k]))
+                while(k < len && isspace(ctx->str[k]))
                     k += 1;
 
                 if(k == len) {
@@ -697,11 +700,11 @@ static bool render(RenderContext *ctx, Kind until)
 
                 long val_var_off = 0;
                 long val_var_len = 0;
-                if(ctx->tmpl[k] == ',') {
+                if(ctx->str[k] == ',') {
 
                     k += 1;
 
-                    while(k < len && isspace(ctx->tmpl[k]))
+                    while(k < len && isspace(ctx->str[k]))
                         k += 1;
 
                     if(k == len) {
@@ -709,18 +712,18 @@ static bool render(RenderContext *ctx, Kind until)
                         return 0;
                     }
 
-                    if(!isalpha(ctx->tmpl[k]) && ctx->tmpl[k] != '_') {
+                    if(!isalpha(ctx->str[k]) && ctx->str[k] != '_') {
                         report(ctx->err, k, "Missing second iteration variable name after ','");
                         return 0;
                     }
 
                     val_var_off = k;
-                    do k += 1; while(k < len && (isalpha(ctx->tmpl[k]) 
-                                             || ctx->tmpl[k] == '_'));
+                    do k += 1; while(k < len && (isalpha(ctx->str[k]) 
+                                             || ctx->str[k] == '_'));
                     val_var_len = k - val_var_off;   
                 }
 
-                while(k < len && isspace(ctx->tmpl[k]))
+                while(k < len && isspace(ctx->str[k]))
                     k += 1;
                 
                 if(k == len) {
@@ -730,10 +733,10 @@ static bool render(RenderContext *ctx, Kind until)
 
                 // Now the "in" keyword is expected
                 if(k+2 >= len 
-                    || ctx->tmpl[k]   != 'i' 
-                    || ctx->tmpl[k+1] != 'n' 
-                    || isalpha(ctx->tmpl[k+2]) 
-                    ||  '_' == ctx->tmpl[k+2]) {
+                    || ctx->str[k]   != 'i' 
+                    || ctx->str[k+1] != 'n' 
+                    || isalpha(ctx->str[k+2]) 
+                    ||  '_' == ctx->str[k+2]) {
                     // NOTE: This may trigger even if there is an
                     // [in] keyword but the statement ends after it.
                     // If that's true, it's not the ideal behaviour.
@@ -745,7 +748,7 @@ static bool render(RenderContext *ctx, Kind until)
 
                 long        coll_off = k;
                 long        coll_len = len - k;
-                const char *coll_str = ctx->tmpl + k;
+                const char *coll_str = ctx->str + k;
 
                 Value collection = eval(coll_str, coll_len, ctx->vars, ctx->err);
                 if(collection.kind == VK_ERROR) {
@@ -764,43 +767,62 @@ static bool render(RenderContext *ctx, Kind until)
                 Variables vars = {
                     ctx->vars,
                     (Variable[]) {
-                        { ctx->tmpl + key_var_off, key_var_len, { VK_INT, .as_int = 0 }},
-                        { ctx->tmpl + val_var_off, val_var_len, { VK_INT, .as_int = 0 }},
+                        { ctx->str + key_var_off, key_var_len, { VK_INT, .as_int = 0 }},
+                        { ctx->str + val_var_off, val_var_len, { VK_INT, .as_int = 0 }},
                         { NULL, 0, { VK_INT, .as_int = 0 }},
                     }
                 };
 
                 vars.parent = ctx->vars;
                 ctx->vars = &vars;
-                long start = ctx->i;
+                long start = ctx->slice_idx;
                 for(int no = 0; no < collection.as_array.count; no += 1) {
                     vars.list[0].value.as_int = no;
                     vars.list[1].value = collection.as_array.items[no];
-                    ctx->i = start;
-                    if(!render(ctx, SEG_ENDFOR))
+                    ctx->slice_idx = start;
+                    if(!render(ctx, SK_ENDFOR))
                         return 0;
                 }
                 ctx->vars = ctx->vars->parent;
                 break;
             }
 
-            case SEG_END:
-            case SEG_ELSE:
-            case SEG_ENDIF:
-            case SEG_ENDFOR:
+            case SK_END:
+            case SK_ELSE:
+            case SK_ENDIF:
+            case SK_ENDFOR:
             /* Unreachable */
             assert(0);
             break;
         }
     }
 
-    if(ctx->segs[ctx->i].kind != SEG_END)
-        ctx->i += 1; // Skip the final token.
-
     return 1;
 }
 
-static Segment *tokenize(const char *tmpl, long len, XT_Error *err)
+static bool append_slice(Slices **slices, Slice slice)
+{
+    Slices *slices2 = *slices;
+
+    if(slices2->count == slices2->max_count) {
+        
+        int new_max_count = (slices2->max_count == 0) 
+                          ? 32 : 2 * slices2->max_count;
+
+        void *temp = realloc(*slices, sizeof(Slices) + new_max_count * sizeof(Slice));
+        if(temp == NULL)
+            return 0;
+
+        slices2 = temp;
+        slices2->max_count = new_max_count;
+        *slices = slices2;
+    }
+
+    slices2->list[slices2->count++] = slice;
+    return 1;
+}
+
+static Slices *tokenize(const char *tmpl, long len, XT_Error *err)
 {
     #define SKIP_SPACES()                \
         while(i < len && (tmpl[i] == ' ' \
@@ -815,59 +837,63 @@ static Segment *tokenize(const char *tmpl, long len, XT_Error *err)
             || tmpl[i+1] != (Y))) \
             i += 1;
 
-    Segment *arr = NULL;
-    long capacity = 32;
-    long count = 0;
+    Slices *slices = malloc(sizeof(Slices));
+    if(slices == NULL) {
+        report(err, 0, "Out of memory");
+        goto failed;
+    }
+    slices->count = 0;
+    slices->max_count = 0;
 
-    Kind context_stack[MAX_DEPTH];
-    bool      has_else[MAX_DEPTH];
-    int depth = 0;
+    SliceKind context[MAX_DEPTH];
+    bool     has_else[MAX_DEPTH];
+    int depth = 0, i = 0;
+    while(1) {
 
-    long i = 0;
-    do {
-        Segment text;
-        text.kind = SEG_TEXT;
+        // Slice the raw text before the next {{ .. }}, {% .. %} or,
+        // end of the string, then append it to the slice list.
+        Slice text;
+        text.kind = SK_TEXT;
         text.off = i;
-        while(i < len && (i+1 > len || tmpl[i] != '{' || (tmpl[i+1] != '%' && tmpl[i+1] != '{')))
+        while(i < len && (i+1 > len 
+                      || tmpl[i] != '{' 
+                      ||   (tmpl[i+1] != '%' 
+                         && tmpl[i+1] != '{')))
             i += 1;
         text.len = i - text.off;
         
-        if(text.len > 0) {
-            if(arr == NULL || count == capacity) {
-
-                capacity *= 2;
-
-                void *temp = realloc(arr, capacity*sizeof(Segment));
-                if(temp == NULL) {
-                    
-                    free(arr);
-
-                    report(err, i, "Out of memory");
-                    return NULL;
-                }
-                arr = temp;
+        if(text.len > 0)
+            if(!append_slice(&slices, text)) {
+                report(err, i, "Out of memory");
+                goto failed;
             }
-            arr[count++] = text;
-        }
 
-        Segment seg;
-        if(i == len) {
-            seg.kind = SEG_END;
-            seg.off = i;
-            seg.len = 0;
-        } else if(tmpl[i+1] == '%') {
+        // Did the source end?
+        if(i == len)
+            break;
 
-            long block_off = i;
+        // Now handle either the {{ .. }} or {% .. %}
 
-            assert(tmpl[i] == '{' && tmpl[i+1] == '%');
-            i += 2;
+        assert(tmpl[i] == '{' && (tmpl[i+1] == '%' || tmpl[i+1] == '{'));
+        i += 2; // Skip the "{%" or "{{"
+
+        Slice slice;
+        if(tmpl[i-1] == '%') {
+
+            assert(tmpl[i-2] == '{' && tmpl[i-1] == '%');
+            long block_off = i-2; // Useful for error reporting. This is the
+                                  // offset of the first '{' of the {% .. %}
+                                  // block.
+
+            // Now skip any spaces between the '%' and
+            // the first keyword. If there is no keyword,
+            // report the error.
 
             SKIP_SPACES()
             
             if(i == len || (!isalpha(tmpl[i]) && tmpl[i] != '_')) {
-                free(arr);
-                report(err, block_off, "block {% .. %} doesn't start with a keyword");
-                return NULL;
+                report(err, block_off, "block {%% .. %%} doesn't start with a keyword");
+                goto failed;
             }
 
             long kword_off = i;
@@ -876,152 +902,158 @@ static Segment *tokenize(const char *tmpl, long len, XT_Error *err)
             while(i < len && (isalpha(tmpl[i]) || tmpl[i] == '_'));
             long kword_len = i - kword_off;
             
+            // The keyword is the substring that starts at offset
+            // [kword_off] and has length [kword_len].
+
+            // Check that:
+            //   - The keyword is valid (if, for, else, endif, ..).
+            //   - If it's an if or for, that the maximum depth of
+            //     nested blocks isn't reached.
+            //   - If it's an endif, it's relative to a previous if.
+            //   - If it's an endfor, it's relativo to a previous for.
+            //   - If it's an else, it's relative to a previous if
+            //     that had no other else associated to it.
+
             switch(kword_len) {
+
                 case 2:
                 if(strncmp(tmpl + kword_off, "if", kword_len))
                     goto badkword;
-                seg.kind = SEG_IF;
                 
                 if(depth == MAX_DEPTH) {
-                    free(arr);
-                    report(err, block_off, "Too many nested {% if .. %} and {% for .. %} blocks");
-                    return NULL;
+                    report(err, block_off, "Too many nested {%% if .. %%} and {%% for .. %%} blocks");
+                    goto failed;
                 }
                 has_else[depth] = 0;
-                context_stack[depth++] = SEG_IF;
+                context[depth++] = SK_IF;
+                slice.kind = SK_IF;
                 break;
 
                 case 3:
                 if(strncmp(tmpl + kword_off, "for", kword_len))
                     goto badkword;
-                seg.kind = SEG_FOR;
 
                 if(depth == MAX_DEPTH) {
-                    free(arr);
-                    report(err, block_off, "Too many nested {% if .. %} and {% for .. %} blocks");
-                    return NULL;
+                    report(err, block_off, "Too many nested {%% if .. %%} and {%% for .. %%} blocks");
+                    goto failed;
                 }
                 has_else[depth] = 0;
-                context_stack[depth++] = SEG_FOR;
+                context[depth++] = SK_FOR;
+                slice.kind = SK_FOR;
                 break;
 
                 case 4:
                 if(strncmp(tmpl + kword_off, "else", kword_len))
                     goto badkword;
 
-                seg.kind = SEG_ELSE;
+                if(depth == 0 || context[depth-1] != SK_IF) {
+                    report(err, block_off, "{%% else %%} has no matching {%% if .. %%}");
+                    goto failed;
+                }
+                if(has_else[depth-1]) {
+                    report(err, block_off, "Can't have multiple {%% else %%} "
+                                           "block relative to one {%% if .. %%}");
+                    goto failed;
+                }
 
-                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
-                    free(arr);
-                    report(err, block_off, "{% else %} has no matching {% if .. %}");
-                    return NULL;
-                }
-                if(has_else[depth]) {
-                    free(arr);
-                    report(err, block_off, "Can't have multiple {% else %} block relative to one {% if .. %}");
-                    return 0;
-                }
+                has_else[depth-1] = true;
+                slice.kind = SK_ELSE;
                 break;
 
                 case 5:
                 if(strncmp(tmpl + kword_off, "endif", kword_len))
                     goto badkword;
-                seg.kind = SEG_ENDIF;
 
-                if(depth == 0 || context_stack[depth-1] != SEG_IF) {
-                    free(arr);
-                    report(err, block_off, "{% endif %} has no matching {% if .. %}");
-                    return NULL;
+                if(depth == 0 || context[depth-1] != SK_IF) {
+                    report(err, block_off, "{%% endif %%} has no matching {%% if .. %%}");
+                    goto failed;
                 }
                 depth -= 1;
+                slice.kind = SK_ENDIF;
                 break;
 
                 case 6:
                 if(strncmp(tmpl + kword_off, "endfor", kword_len))
                     goto badkword;
-                seg.kind = SEG_ENDFOR;
 
-                if(depth == 0 || context_stack[depth-1] != SEG_FOR) {
-                    free(arr);
-                    report(err, block_off, "{% endfor %} has no matching {% for .. %}");
-                    return NULL;
+                if(depth == 0 || context[depth-1] != SK_FOR) {
+                    report(err, block_off, "{%% endfor %%} has no matching {%% for .. %%}");
+                    goto failed;
                 }
                 depth -= 1;
+                slice.kind = SK_ENDFOR;
                 break;
 
                 default:
             badkword:
-                free(arr);
-                report(err, kword_off, "Bad {% .. %} block keyword");
-                return NULL;
+                report(err, kword_off, "Bad {%% .. %%} block keyword");
+                goto failed;
             }
 
-            seg.off = i;
+            // Now get the slice that goes from the first
+            // byte after the keyword until the byte before
+            // the '%' of the ending "%}" (or the end of
+            // the source).
+
+            slice.off = i;
             SKIP_UNTIL_2('%', '}')
-            seg.len = i - seg.off;
+            slice.len = i - slice.off;
 
-            if(i == len)
-                break;
-
-            assert(tmpl[i] == '%' && tmpl[i+1] == '}');
-            i += 2;
-        
         } else {
 
-            assert(tmpl[i] == '{' && tmpl[i+1] == '{');
-            i += 2;
+            assert(tmpl[i-2] == '{' && tmpl[i-1] == '{');
 
-            seg.kind = SEG_EXPR;
-            seg.off = i;
+            slice.kind = SK_EXPR;
+            slice.off = i;
             SKIP_UNTIL_2('}', '}')
-            seg.len = i - seg.off;
-            
-            if(i < len)
-                i += 2; // Skip "}}"
+            slice.len = i - slice.off;
         }
 
-        if(arr == NULL || count == capacity) {
-            capacity *= 2;
-            void *temp = realloc(arr, capacity*sizeof(Segment));
-            if(temp == NULL) {
-                free(arr);
-                report(err, i, "Out of memory");
-                return NULL;
-            }
-            arr = temp;
+        if(i < len) {
+            assert((tmpl[i] == '%' || tmpl[i] == '}') && tmpl[i+1] == '}');
+            i += 2; // Skip the "%}" or "}}"
         }
-        arr[count++] = seg;
 
-    } while(arr[count-1].kind != SEG_END);
+        if(!append_slice(&slices, slice)) {
+            report(err, i, "Out of memory");
+            goto failed;
+        }
+    }
 
-    return arr;
+    return slices;
+
+failed:
+    assert(err == NULL || err->occurred == true);
+    free(slices);
+    return NULL;
 }
 
-bool xtmpl2(const char *tmpl, long len, Variables *vars, xt_callback callback, void *userp, XT_Error *err)
+bool xtmpl2(const char *str, long len, Variables *vars, 
+            xt_callback callback, void *userp, XT_Error *err)
 {
     memset(err, 0, sizeof(XT_Error));
-    Segment *segs = tokenize(tmpl, len, err);
-    if(segs == NULL) {
-        assert(err->occurred);
+    Slices *slices = tokenize(str, len, err);
+    if(slices == NULL) {
+        assert(err == NULL || err->occurred == true);
         return 0;
     }
 
     RenderContext ctx = {
              .err = err,
             .vars = vars,
-            .segs = segs,
-            .tmpl = tmpl,
+          .slices = slices,
+             .str = str,
              .len = len,
-               .i = 0,
+       .slice_idx = 0,
            .userp = userp,
         .callback = callback,
     };
 
-    bool ok = render(&ctx, SEG_END);
+    bool ok = render(&ctx, SK_END);
     assert((ok && err->occurred == false) || 
           (!ok && err->occurred == true));
 
-    free(segs);
+    free(slices);
     return ok;
 }
 
@@ -1063,12 +1095,12 @@ static void callback(const char *str, long len, void *userp)
     buff->used += len;
 }
 
-char *xtmpl(const char *tmpl, long len, Variables *vars, long *outlen, XT_Error *err)
+char *xtmpl(const char *str, long len, Variables *vars, long *outlen, XT_Error *err)
 {
     buff_t buff;
     memset(&buff, 0, sizeof(buff_t));
     
-    if(!xtmpl2(tmpl, len, vars, callback, &buff, err)) {
+    if(!xtmpl2(str, len, vars, callback, &buff, err)) {
         free(buff.data);
         return NULL;
     }

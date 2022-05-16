@@ -50,8 +50,8 @@ struct Variables {
 
 typedef void (*xt_callback)(const char*, long, void*);
 
-bool xtmpl2(const char *tmpl, long len, Variables *vars, 
+bool xtmpl2(const char *str, long len, Variables *vars, 
             xt_callback callback, void *userp, XT_Error *err);
 
-char *xtmpl(const char *tmpl, long len, Variables *vars,
+char *xtmpl(const char *str, long len, Variables *vars,
             long *outlen, XT_Error *err);
