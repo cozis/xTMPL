@@ -64,28 +64,28 @@ typedef enum {
  *
  * For every other type, the slice refers to the
  * inner portion of each {% .. %} block, specifically
- * the the substring that comes after the keyword
- * until the ending %}.
+ * the substring that comes after the keyword until 
+ * the ending %}.
  *
  * While slicing up the template, checks to ensure
- * the validity of the block structure are done, like
+ * the validity of the blocks structure are done, like
  * ensured that each {% if .. %} has an {% endif %} 
  * and optionally an {% else %}, each {% for .. %}
  * has an {% endfor %} etc.
  *
  * Once the slice array is computed, the "Rendering
  * Routine" implemented by [render] can be called 
- * on it to start the execution.
+ * on it to start the rendering.
  * 
- * The execution basically loops over the slices 
- * and renders to the ouput of any text or expression 
- * print blocks, evaluates the expressions inside 
- * {% if .. %} and {% for .. %} blocks and jumps 
- * around based on their result, always rendering 
- * to the output.
+ * The [render] routine basically loops over the 
+ * slices and renders to the ouput any text or 
+ * expression print blocks, evaluates the expressions 
+ * inside {% if .. %} and {% for .. %} blocks and 
+ * jumps around based on their result, always 
+ * rendering to the output.
  *
  * Whenever the rendering routine needs to evaluate 
- * an expression, it calls the "Rendering Routine" 
+ * an expression, it calls the "Expression Evaluator" 
  * implemented by [eval].
  *
  * The [eval] function parses and evaluates expressions
