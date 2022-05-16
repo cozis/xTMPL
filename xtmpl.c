@@ -479,7 +479,7 @@ static bool next_binary_operat(EvalContext *ctx, OperatID *operat, long *off)
             *operat = OID_MUL;
             return 1;
 
-            case '/':
+           case '/':
             *off = ctx->i;
             ctx->i += 1;
             *operat = OID_DIV;
@@ -488,7 +488,7 @@ static bool next_binary_operat(EvalContext *ctx, OperatID *operat, long *off)
     return 0;
 }
 
-static long preced_of(OperatID operat)
+static inline long preced_of(OperatID operat)
 {
     static const long map[] = {
         [OID_ADD] = 0,
@@ -499,7 +499,7 @@ static long preced_of(OperatID operat)
     return map[operat];
 }
 
-static bool is_right_assoc(OperatID operat)
+static inline bool is_right_assoc(OperatID operat)
 {
     (void) operat;
     return 0;
@@ -570,6 +570,28 @@ static Value eval(const char *str, long len, Variables *vars, XT_Error *err)
     return val;
 }
 
+static bool iskword(const char *str, long len)
+{
+    static struct {
+        char str[6];
+        long len;
+    } kwords[] = {
+        #define KWORD(lit) { lit, sizeof(lit)-1 }
+        KWORD("in"),
+        KWORD("if"),
+        KWORD("for"),
+        KWORD("else"),
+        KWORD("endif"),
+        KWORD("endfor"),
+        #undef KWORD
+    };
+
+    for(unsigned int i = 0; i < sizeof(kwords)/sizeof(kwords[0]); i += 1)
+        if(len == kwords[i].len && !memcmp(str, kwords[i].str, len))
+            return 1;
+    return 0;
+}
+
 static bool parse_for_statement(const char *str, long len, 
                                char *var1, char *var2, long var_max, 
                                long *coll_off, long *coll_len,
@@ -617,6 +639,14 @@ static bool parse_for_statement(const char *str, long len,
 
         /* End of "A" */
         long key_var_len = i - key_var_off;
+
+        if(iskword(str + key_var_off, key_var_len)) {
+            report(err, key_var_off, 
+                "Unexpected keyword [%.*s] where an iteration "
+                "variable name was expected",
+                (int) key_var_len, str + key_var_off);
+            return 0;
+        }
 
         if(key_var_len > var_max-1) {
             report(err, key_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
@@ -667,6 +697,14 @@ static bool parse_for_statement(const char *str, long len,
                                  || str[i] == '_'));
         /* End of B */
         long val_var_len = i - val_var_off;
+
+        if(iskword(str + val_var_off, val_var_len)) {
+            report(err, val_var_off, 
+                "Unexpected keyword [%.*s] where an iteration "
+                "variable name was expected",
+                (int) val_var_len, str + val_var_off);
+            return 0;
+        }
 
         if(val_var_len > var_max-1) {
             report(err, val_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
@@ -1059,8 +1097,8 @@ static Slices *slice_up(const char *tmpl, long len, XT_Error *err)
                     goto failed;
                 }
                 if(has_else[depth-1]) {
-                    report(err, block_off, "Can't have multiple {%% else %%} "
-                                           "block relative to one {%% if .. %%}");
+                    report(err, block_off, "Can't have multiple {%% else %%} blocks "
+                                           "relative to only one {%% if .. %%}");
                     goto failed;
                 }
 

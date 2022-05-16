@@ -25,13 +25,13 @@ struct {
         .src = "{% if %}{% if %}{% if %}{% if %}"
                "{% if %}{% if %}{% if %}{% if %}"
                "{% if %}{% if %}{% if %}{% if %}", 
-        .err = "Too many nested if-else and for blocks"},
+        .err = "Too many nested {% if .. %} and {% for .. %} blocks"},
    
     {__LINE__, 
         .src = "{% for %}{% for %}{% for %}{% for %}"
                "{% for %}{% for %}{% for %}{% for %}"
                "{% for %}{% for %}{% for %}{% for %}", 
-        .err = "Too many nested if-else and for blocks"},
+        .err = "Too many nested {% if .. %} and {% for .. %} blocks"},
    
     {__LINE__, .src = "{% else %}", .err = "{% else %} has no matching {% if .. %}"},
     {__LINE__, .src = "{% endif %}", .err = "{% endif %} has no matching {% if .. %}"},
@@ -48,10 +48,10 @@ struct {
     {__LINE__, .src = "{{ }}",  .err = "Expression ended where a primary expression was expected"},
     {__LINE__, .src = "{{  }}", .err = "Expression ended where a primary expression was expected"},
     {__LINE__, .src = "{{20000000000000000000}}", .err = "Overflow"},
-    {__LINE__, .src = "{{@}}",     .err = "Unexpected character where a primary expression was expected"},
-    {__LINE__, .src = "{{ @ }}",   .err = "Unexpected character where a primary expression was expected"},
-    {__LINE__, .src = "{{  @  }}", .err = "Unexpected character where a primary expression was expected"},
-    {__LINE__, .src = "{% if 0 %}{% else %}{% else %}", .err = "Orphan {% else %}"},
+    {__LINE__, .src = "{{@}}",     .err = "Unexpected character [@] where a primary expression was expected"},
+    {__LINE__, .src = "{{ @ }}",   .err = "Unexpected character [@] where a primary expression was expected"},
+    {__LINE__, .src = "{{  @  }}", .err = "Unexpected character [@] where a primary expression was expected"},
+    {__LINE__, .src = "{% if 0 %}{% else %}{% else %}", .err = "Can't have multiple {% else %} blocks relative to only one {% if .. %}"},
 };
 
 int main()
