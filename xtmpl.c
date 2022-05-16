@@ -137,132 +137,46 @@ static void value_print(Value val, xt_callback callback, void *userp)
 
 static Value apply(OperatID operat, Value lhs, Value rhs, const char **err)
 {
-    if(lhs.kind == VK_ERROR)
-        return lhs;
+    if(lhs.kind == VK_ERROR) return lhs;
+    if(rhs.kind == VK_ERROR) return rhs;
 
-    if(rhs.kind == VK_ERROR)
-        return rhs;
+    #define PACK(X, Y, Z)                  \
+        (((unsigned long long) X) <<  0) | \
+        (((unsigned long long) Y) << 16) | \
+        (((unsigned long long) Z) << 32)
 
-    switch(operat) {
-        case OID_ADD:
-        {
-            // TODO: Check overflow.
+    switch(PACK(operat, lhs.kind, rhs.kind)) {
+        // TODO: Check overflow.
+        case PACK(OID_ADD, VK_INT,   VK_INT):   return (Value) { VK_INT,   .as_int   = lhs.as_int   + rhs.as_int   };
+        case PACK(OID_ADD, VK_INT,   VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_int   + rhs.as_float };
+        case PACK(OID_ADD, VK_FLOAT, VK_INT):   return (Value) { VK_FLOAT, .as_float = lhs.as_float + rhs.as_int   };
+        case PACK(OID_ADD, VK_FLOAT, VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_float + rhs.as_float };
 
-            if(lhs.kind == VK_INT && rhs.kind == VK_INT)
-                return (Value) { VK_INT, 
-                    .as_int = lhs.as_int 
-                            + rhs.as_int };
+        case PACK(OID_SUB, VK_INT,   VK_INT):   return (Value) { VK_INT,   .as_int   = lhs.as_int   - rhs.as_int   };
+        case PACK(OID_SUB, VK_INT,   VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_int   - rhs.as_float };
+        case PACK(OID_SUB, VK_FLOAT, VK_INT):   return (Value) { VK_FLOAT, .as_float = lhs.as_float - rhs.as_int   };
+        case PACK(OID_SUB, VK_FLOAT, VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_float - rhs.as_float };
 
-            if(lhs.kind == VK_INT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_int 
-                              + rhs.as_float };
+        case PACK(OID_MUL, VK_INT,   VK_INT):   return (Value) { VK_INT,   .as_int   = lhs.as_int   * rhs.as_int   };
+        case PACK(OID_MUL, VK_INT,   VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_int   * rhs.as_float };
+        case PACK(OID_MUL, VK_FLOAT, VK_INT):   return (Value) { VK_FLOAT, .as_float = lhs.as_float * rhs.as_int   };
+        case PACK(OID_MUL, VK_FLOAT, VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_float * rhs.as_float };
 
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_INT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              + rhs.as_int };
+        case PACK(OID_DIV, VK_INT,   VK_INT):   return (Value) { VK_INT,   .as_int   = lhs.as_int   / rhs.as_int   };
+        case PACK(OID_DIV, VK_INT,   VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_int   / rhs.as_float };
+        case PACK(OID_DIV, VK_FLOAT, VK_INT):   return (Value) { VK_FLOAT, .as_float = lhs.as_float / rhs.as_int   };
+        case PACK(OID_DIV, VK_FLOAT, VK_FLOAT): return (Value) { VK_FLOAT, .as_float = lhs.as_float / rhs.as_float };
 
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              + rhs.as_float };
-
-            if(err)
-                *err = "Bad \"+\" operand";
-            return (Value) { VK_ERROR };
+        default:
+        switch(operat) {
+            case OID_ADD: *err = "Bad \"+\" operand"; break;
+            case OID_SUB: *err = "Bad \"-\" operand"; break;
+            case OID_MUL: *err = "Bad \"*\" operand"; break;
+            case OID_DIV: *err = "Bad \"/\" operand"; break;
         }
-
-        case OID_SUB:
-        {
-            // TODO: Check overflow.
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_INT)
-                return (Value) { VK_INT, 
-                    .as_int = lhs.as_int 
-                            - rhs.as_int };
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_int 
-                              - rhs.as_float };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_INT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              - rhs.as_int };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              - rhs.as_float };
-
-            if(err)
-                *err = "Bad \"-\" operand";
-            return (Value) { VK_ERROR };
-        }
-
-        case OID_MUL:
-        {
-            // TODO: Check overflow.
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_INT)
-                return (Value) { VK_INT, 
-                    .as_int = lhs.as_int 
-                            * rhs.as_int };
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_int 
-                              * rhs.as_float };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_INT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              * rhs.as_int };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              * rhs.as_float };
-
-            if(err)
-                *err = "Bad \"*\" operand";
-            return (Value) { VK_ERROR };
-        }
-
-        case OID_DIV:
-        {
-            // TODO: Check overflow.
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_INT)
-                return (Value) { VK_INT, 
-                    .as_int = lhs.as_int 
-                            / rhs.as_int };
-
-            if(lhs.kind == VK_INT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_int 
-                              / rhs.as_float };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_INT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              / rhs.as_int };
-
-            if(lhs.kind == VK_FLOAT && rhs.kind == VK_FLOAT)
-                return (Value) { VK_FLOAT, 
-                    .as_float = lhs.as_float 
-                              / rhs.as_float };
-
-            if(err)
-                *err = "Bad \"/\" operand";
-            return (Value) { VK_ERROR };
-        }
+        break;
     }
 
-    /* UNREACHABLE */
-    assert(0);
     return (Value) { VK_ERROR };
 }
 
