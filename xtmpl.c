@@ -827,7 +827,7 @@ static bool append_slice(Slices **slices, Slice slice)
     return 1;
 }
 
-static Slices *tokenize(const char *tmpl, long len, XT_Error *err)
+static Slices *slice_up(const char *tmpl, long len, XT_Error *err)
 {
     #define SKIP_SPACES()                \
         while(i < len && (tmpl[i] == ' ' \
@@ -1036,11 +1036,20 @@ failed:
 bool xtmpl2(const char *str, long len, Variables *vars, 
             xt_callback callback, void *userp, XT_Error *err)
 {
+    if(str == NULL)
+        str = "";
+
+    if(len < 0)
+        len = strlen(str);
+
     memset(err, 0, sizeof(XT_Error));
-    Slices *slices = tokenize(str, len, err);
+    Slices *slices = NULL;
+    bool ok = false;
+
+    slices = slice_up(str, len, err);
     if(slices == NULL) {
         assert(err == NULL || err->occurred == true);
-        return 0;
+        goto done;
     }
 
     RenderContext ctx = {
@@ -1054,9 +1063,36 @@ bool xtmpl2(const char *str, long len, Variables *vars,
         .callback = callback,
     };
 
-    bool ok = render(&ctx, SK_END);
+    if(!render(&ctx, SK_END)) {
+        assert(err == NULL || err->occurred == true);
+        goto done;
+    }
+
+    ok = true;
+done:
+    
     assert((ok && err->occurred == false) || 
           (!ok && err->occurred == true));
+
+    if(!ok && err && err->off >= 0) {
+        // Calculate the line and column of the error
+        // given the absolute offset and the string.
+        assert(err->off < len);
+
+        long col = 1, 
+             row = 1;
+        long i = 0;
+        while(i < err->off) {
+            col += 1;
+            if(str[i] == '\n') {
+                col = 0;
+                row += 1;
+            }
+            i += 1;
+        }
+        err->col = col;
+        err->row = row;
+    }
 
     free(slices);
     return ok;
