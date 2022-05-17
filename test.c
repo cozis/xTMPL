@@ -16,6 +16,56 @@ struct {
     {__LINE__, "{{10}}", "10", NULL},
     {__LINE__, "{{1.1}}", "1.100000", NULL},
     {__LINE__, "{{10.10}}", "10.100000", NULL},
+
+    {__LINE__, .src = "{{[]}}",  .exp = "[]"},
+    {__LINE__, .src = "{{[1]}}", .exp = "[1]"},
+    {__LINE__, .src = "{{[1, 2, 3]}}", .exp = "[1, 2, 3]"},
+    {__LINE__, .src = "{{[  1, 2, 3  ]}}", .exp = "[1, 2, 3]"},
+    {__LINE__, .src = "{{[}}",  .err = "Expression ended inside of an array"},
+    {__LINE__, .src = "{{[1}}", .err = "Expression ended inside of an array"},
+    {__LINE__, .src = "{{[1@}}", .err = "Unexpected character [@] inside of an array where ',' was expected"},
+
+    {__LINE__, .src = "{{2+3}}",     .exp = "5"},
+    {__LINE__, .src = "{{2+3.0}}",   .exp = "5.000000"},
+    {__LINE__, .src = "{{2.0+3}}",   .exp = "5.000000"},
+    {__LINE__, .src = "{{2.0+3.0}}", .exp = "5.000000"},
+
+    {__LINE__, .src = "{{2-3}}",     .exp = "-1"},
+    {__LINE__, .src = "{{2-3.0}}",   .exp = "-1.000000"},
+    {__LINE__, .src = "{{2.0-3}}",   .exp = "-1.000000"},
+    {__LINE__, .src = "{{2.0-3.0}}", .exp = "-1.000000"},
+
+    {__LINE__, .src = "{{2*3}}",     .exp = "6"},
+    {__LINE__, .src = "{{2*3.0}}",   .exp = "6.000000"},
+    {__LINE__, .src = "{{2.0*3}}",   .exp = "6.000000"},
+    {__LINE__, .src = "{{2.0*3.0}}", .exp = "6.000000"},
+
+    {__LINE__, .src = "{{2/3}}",     .exp = "0"},
+    {__LINE__, .src = "{{2/3.0}}",   .exp = "0.666667"},
+    {__LINE__, .src = "{{2.0/3}}",   .exp = "0.666667"},
+    {__LINE__, .src = "{{2.0/3.0}}", .exp = "0.666667"},
+
+    {__LINE__, .src = "{{1+[]}}", .exp = "Bad \"+\" operand"},
+    {__LINE__, .src = "{{1-[]}}", .exp = "Bad \"-\" operand"},
+    {__LINE__, .src = "{{1*[]}}", .exp = "Bad \"*\" operand"},
+    {__LINE__, .src = "{{1/[]}}", .exp = "Bad \"/\" operand"},
+    
+    {__LINE__, .src = "{{2*3+5}}", .exp = "11"},
+    {__LINE__, .src = "{{2+3*5}}", .exp = "17"},
+
+    {__LINE__, .src = "{{x}}",    .err = "Undefined variable [x]"},
+    {__LINE__, .src = "{{xy}}",   .err = "Undefined variable [xy]"},
+    {__LINE__, .src = "{{xy0}}",  .err = "Undefined variable [xy0]"},
+    {__LINE__, .src = "{{xy01}}", .err = "Undefined variable [xy01]"},
+    {__LINE__, .src = "{{_xy01}}", .err = "Undefined variable [_xy01]"},
+    {__LINE__, .src = "{{xy01_}}", .err = "Undefined variable [xy01_]"},
+    {__LINE__, .src = "{{xy_01}}", .err = "Undefined variable [xy_01]"},
+
+    {__LINE__, .src = "{% for in %}", .err = "Unexpected keyword [in] where an iteration variable name was expected" },
+    {__LINE__, .src = "{% for x in [] %}", .exp = "" },
+    {__LINE__, .src = "{% for xy0_ in [] %}", .exp = "" },
+    {__LINE__, .src = "{% for xy0_, xy0_ in [] %}", .exp = "" },
+
     {__LINE__, "{%%}",    NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{% %}",   NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{%@%}",   NULL, "block {% .. %} doesn't start with a keyword"},
@@ -59,9 +109,12 @@ int main()
     long total = sizeof(tcases)/sizeof(tcases[0]);
     long passed = 0;
     for(int i = 0; i < total; i += 1) {
+        
         const char *src = tcases[i].src;
         const char *exp = tcases[i].exp;
         const char *exp_err = tcases[i].err;
+        printf("(Line: %ld)\n", tcases[i].line);
+
         XT_Error err;
         char *res = xt_render_str_to_str(src, -1, NULL, NULL, &err);
         if(exp == NULL && res == NULL) {

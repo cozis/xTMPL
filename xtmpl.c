@@ -326,7 +326,7 @@ static Value eval_primary(EvalContext *ctx)
         return (Value) { VK_ERROR };
     }
 
-    if(isalpha(ctx->str[ctx->i])) {
+    if(isalpha(ctx->str[ctx->i]) || ctx->str[ctx->i ] == '_') {
 
         long var_off = ctx->i;
         do 
@@ -534,6 +534,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
                 assert(ctx->err->occurred);
                 return rhs;
             }
+            operat2_off = ctx->i;
         }
         ctx->i = operat2_off;
 
@@ -545,6 +546,7 @@ static Value eval_expr_1(EvalContext *ctx, Value lhs, long min_preced)
             report(ctx->err, operat_off, "%s", errmsg);
             return lhs;
         }
+        operat_off = ctx->i;
     }
     ctx->i = operat_off;
     return lhs;
@@ -635,7 +637,7 @@ static bool parse_for_statement(const char *str, long len,
 
         do 
             i += 1;
-        while(i < len && (isalpha(str[i]) || str[i] == '_'));
+        while(i < len && (isalpha(str[i]) || isdigit(str[i]) || str[i] == '_'));
 
         /* End of "A" */
         long key_var_len = i - key_var_off;
@@ -693,7 +695,7 @@ static bool parse_for_statement(const char *str, long len,
         }
 
         long val_var_off = i;
-        do i += 1; while(i < len && (isalpha(str[i]) 
+        do i += 1; while(i < len && (isalpha(str[i]) || isdigit(str[i]) 
                                  || str[i] == '_'));
         /* End of B */
         long val_var_len = i - val_var_off;
@@ -740,7 +742,7 @@ static bool parse_for_statement(const char *str, long len,
             // NOTE: This may trigger even if there is an
             // [in] keyword but the statement ends after it.
             // If that's true, it's not the ideal behaviour.
-            report(err, i, "Missing in keyword after iteration variable names");
+            report(err, i, "Missing [in] keyword after iteration variable names");
             return 0;
         }
 
@@ -1050,7 +1052,7 @@ static Slices *slice_up(const char *tmpl, long len, XT_Error *err)
             
             // The keyword is the substring that starts at offset
             // [kword_off] and has length [kword_len].
-
+            
             // Check that:
             //   - The keyword is valid (if, for, else, endif, ..).
             //   - If it's an if or for, that the maximum depth of
@@ -1061,7 +1063,7 @@ static Slices *slice_up(const char *tmpl, long len, XT_Error *err)
             //     that had no other else associated to it.
 
             switch(kword_len) {
-
+                
                 case 2:
                 if(strncmp(tmpl + kword_off, "if", kword_len))
                     goto badkword;
@@ -1175,7 +1177,7 @@ failed:
 }
 
 bool xt_render_str_to_cb(const char *str, long len, Variables *vars, 
-                              xt_callback callback, void *userp, XT_Error *err)
+                         xt_callback callback, void *userp, XT_Error *err)
 {
     if(str == NULL)
         str = "";
@@ -1277,7 +1279,9 @@ static void callback(const char *str, long len, void *userp)
     buff->used += len;
 }
 
-char *xt_render_str_to_str(const char *str, long len, Variables *vars, long *outlen, XT_Error *err)
+char *xt_render_str_to_str(const char *str, long len, 
+                           Variables *vars, long *outlen, 
+                           XT_Error *err)
 {
     buff_t buff;
     memset(&buff, 0, sizeof(buff_t));
@@ -1366,7 +1370,8 @@ failed:
 }
 
 bool xt_render_file_to_cb(const char *file, Variables *vars, 
-                               xt_callback callback, void *userp, XT_Error *err)
+                          xt_callback callback, void *userp, 
+                          XT_Error *err)
 {
     long len;
     const char *errmsg;
@@ -1383,7 +1388,7 @@ bool xt_render_file_to_cb(const char *file, Variables *vars,
 }
 
 char *xt_render_file_to_str(const char *file, Variables *vars, 
-                                 long *outlen, XT_Error *err)
+                            long *outlen, XT_Error *err)
 {
     long len;
     const char *errmsg;
