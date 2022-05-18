@@ -4,7 +4,20 @@
 #include <stdio.h>
 #include "xtmpl.h"
 
-
+/* The testing is done in three phases:
+ *
+ *   - first, a simple execution of all test cases 
+ *     is done
+ *
+ *   - after that, a second run is done to track 
+ *     all locations where allocations occur
+ *     (these runs don't count as tests)
+ *
+ *   - then, for each tracked allocation, all test
+ *     cases are run but making that target allocation
+ *     fail. At this point the test result is the
+ *     comparison of allocation and deallocation count.
+ */
 
 //#define PRINT_TEST_LINES
 
