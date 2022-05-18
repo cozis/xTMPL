@@ -400,7 +400,7 @@ static Value eval_primary(EvalContext *ctx)
             ctx->i += 1;
 
         if(ctx->i == ctx->len) {
-            report(ctx->err, ctx->len, "expression ended inside of an array");
+            report(ctx->err, ctx->len, "Expression ended inside of an array");
             return (Value) {VK_ERROR};
         }
 
@@ -416,11 +416,14 @@ static Value eval_primary(EvalContext *ctx)
             while(1) {
 
                 Value val = eval_inner(ctx);
-                if(val.kind == VK_ERROR)
+                if(val.kind == VK_ERROR) {
+                    value_free(&array);
                     return val;
+                }
 
                 if(!array_append(&array, val, &errmsg)) {
                     report(ctx->err, ctx->i, "%s", errmsg);
+                    value_free(&array);
                     return (Value) {VK_ERROR};
                 }
 
@@ -429,6 +432,7 @@ static Value eval_primary(EvalContext *ctx)
 
                 if(ctx->i == ctx->len) {
                     report(ctx->err, ctx->i, "Expression ended inside of an array");
+                    value_free(&array);
                     return (Value) {VK_ERROR};
                 }
                 
@@ -437,6 +441,7 @@ static Value eval_primary(EvalContext *ctx)
 
                 if(ctx->str[ctx->i] != ',') {
                     report(ctx->err, ctx->i, "Unexpected character [%c] inside of an array", ctx->str[ctx->i]);
+                    value_free(&array);
                     return (Value) { VK_ERROR };
                 }
                 
@@ -651,7 +656,7 @@ static bool parse_for_statement(const char *str, long len,
         }
 
         if(key_var_len > var_max-1) {
-            report(err, key_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
+            report(err, key_var_off, "Variable name [%.*s] is too long (the maximum is %d)", 
                 (int) key_var_len, str + key_var_off, var_max-1);
             return 0;
         }
@@ -709,7 +714,7 @@ static bool parse_for_statement(const char *str, long len,
         }
 
         if(val_var_len > var_max-1) {
-            report(err, val_var_off, "Variable name [%.*s] is too long. The maximum is %d\n", 
+            report(err, val_var_off, "Variable name [%.*s] is too long (the maximum is %d)", 
                 (int) val_var_len, str + val_var_off, var_max-1);
             return 0;
         }
@@ -1287,6 +1292,7 @@ char *xt_render_str_to_str(const char *str, long len,
     memset(&buff, 0, sizeof(buff_t));
     
     if(!xt_render_str_to_cb(str, len, vars, callback, &buff, err)) {
+        assert(err == NULL || err->occurred == true);
         free(buff.data);
         return NULL;
     }

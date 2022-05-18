@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include "xtmpl.h"
 
-#define PRINT_TEST_LINES
+
+
+//#define PRINT_TEST_LINES
 
 static long alloc_count = 0;
 static long  free_count = 0;
@@ -22,42 +24,52 @@ static long failing_line = -1;
 
 static void *realloc_override(void *p, size_t n, long line)
 {
-    if(realloc_behaviour == TRACE_ALLOC_LINES) {
+    if(p == NULL) {
+        /* It's a new allocation! */
 
-        assert(failing_line == -1);
-        assert(traced_lines_count >= 0);
-        assert((unsigned int) traced_lines_count < sizeof(traced_lines)/sizeof(traced_lines[0]));
-        
-        bool already_traced_line = false;
-        for(int i = 0; i < traced_lines_count; i += 1)
-            if(traced_lines[i] == line) {
-                already_traced_line = true;
-                break;
-            }
+        if(realloc_behaviour == TRACE_ALLOC_LINES) {
 
-        if(already_traced_line == false)
-            traced_lines[traced_lines_count++] = line;
+            assert(failing_line == -1);
+            assert(traced_lines_count >= 0);
+            assert((unsigned int) traced_lines_count < sizeof(traced_lines)/sizeof(traced_lines[0]));
+            
+            bool already_traced_line = false;
+            for(int i = 0; i < traced_lines_count; i += 1)
+                if(traced_lines[i] == line) {
+                    already_traced_line = true;
+                    break;
+                }
 
-    } else if(realloc_behaviour == FAIL_AT_LINE) {
+            if(already_traced_line == false)
+                traced_lines[traced_lines_count++] = line;
 
-        assert(failing_line >= 0);
-        if(line == failing_line)
-            return NULL;
+        } else if(realloc_behaviour == FAIL_AT_LINE) {
 
+            assert(failing_line >= 0);
+            if(line == failing_line)
+                return NULL;
+        }
     }
 
     void *g = realloc(p, n);
 
-    if(g != NULL && p == NULL && n > 0)
+    if(g != NULL && p == NULL)
         alloc_count += 1;
-    else if(p != NULL && n == 0)
-        free_count += 1;
 
     return g;
 }
+
+static void free_override(void *p)
+{
+    if(p != NULL) {
+        free_count += 1;
+        free(p);
+    }
+}
+
 #define  malloc(n)    realloc_override(NULL, n, __LINE__)
 #define realloc(p, n) realloc_override(p,    n, __LINE__)
-#define    free(p)    realloc_override(p,    0, __LINE__)
+#define    free(p)       free_override(p)
 
 #include "xtmpl.c"
 
@@ -80,8 +92,41 @@ struct {
     {__LINE__, .src = "{{[  1, 2, 3  ]}}", .exp = "[1, 2, 3]"},
     {__LINE__, .src = "{{[}}",  .err = "Expression ended inside of an array"},
     {__LINE__, .src = "{{[1}}", .err = "Expression ended inside of an array"},
-    {__LINE__, .src = "{{[1@}}", .err = "Unexpected character [@] inside of an array where ',' was expected"},
-
+    {__LINE__, .src = "{{[1@}}", .err = "Unexpected character [@] inside of an array"},
+    {__LINE__, .src = "{% if [0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0,"
+                             "0, 0, 0, 0, 0, 0, 0] %}", .exp = "" },
     {__LINE__, .src = "{{2+3}}",     .exp = "5"},
     {__LINE__, .src = "{{2+3.0}}",   .exp = "5.000000"},
     {__LINE__, .src = "{{2.0+3}}",   .exp = "5.000000"},
@@ -102,10 +147,10 @@ struct {
     {__LINE__, .src = "{{2.0/3}}",   .exp = "0.666667"},
     {__LINE__, .src = "{{2.0/3.0}}", .exp = "0.666667"},
 
-    {__LINE__, .src = "{{1+[]}}", .exp = "Bad \"+\" operand"},
-    {__LINE__, .src = "{{1-[]}}", .exp = "Bad \"-\" operand"},
-    {__LINE__, .src = "{{1*[]}}", .exp = "Bad \"*\" operand"},
-    {__LINE__, .src = "{{1/[]}}", .exp = "Bad \"/\" operand"},
+    {__LINE__, .src = "{{1+[]}}", .err = "Bad \"+\" operand"},
+    {__LINE__, .src = "{{1-[]}}", .err = "Bad \"-\" operand"},
+    {__LINE__, .src = "{{1*[]}}", .err = "Bad \"*\" operand"},
+    {__LINE__, .src = "{{1/[]}}", .err = "Bad \"/\" operand"},
     
     {__LINE__, .src = "{{2*3+5}}", .exp = "11"},
     {__LINE__, .src = "{{2+3*5}}", .exp = "17"},
@@ -118,14 +163,68 @@ struct {
     {__LINE__, .src = "{{xy01_}}", .err = "Undefined variable [xy01_]"},
     {__LINE__, .src = "{{xy_01}}", .err = "Undefined variable [xy_01]"},
 
+    {__LINE__, .src = "{% for %}", .err = "For statement ended unexpectedly"},
+    {__LINE__, .src = "{% for @ %}", .err = "Missing iteration variable name after [for] keyword"},
     {__LINE__, .src = "{% for in %}", .err = "Unexpected keyword [in] where an iteration variable name was expected" },
     {__LINE__, .src = "{% for x in [] %}", .exp = "" },
     {__LINE__, .src = "{% for xy0_ in [] %}", .exp = "" },
     {__LINE__, .src = "{% for xy0_, xy0_ in [] %}", .exp = "" },
     {__LINE__, .src = "{% for x in [] %}{% endfor %}", .exp = ""},
+    {__LINE__, .src = "{% for xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx%}", 
+                .err = "Variable name ["
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx] is too long (the maximum is 31)"},
+    {__LINE__, .src = "{% for x, xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx"
+                                "xxxxxxxxxxxxxxxx%}", 
+                .err = "Variable name ["
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx"
+                             "xxxxxxxxxxxxxxxx] is too long (the maximum is 31)"},
+    {__LINE__, .src = "{% for x %}", .err = "For statement ended unexpectedly"},
+    {__LINE__, .src = "{% for x, %}", .err = "For statement ended unexpectedly"},
+    {__LINE__, .src = "{% for x, @ %}", .err = "Missing second iteration variable name after ','"},
+    
+    {__LINE__, .src = "{% for x, in %}", .err = "Unexpected keyword [in] where an iteration variable name was expected"},
+    {__LINE__, .src = "{% for x, if %}", .err = "Unexpected keyword [if] where an iteration variable name was expected"},
+    {__LINE__, .src = "{% for x, for %}", .err = "Unexpected keyword [for] where an iteration variable name was expected"},
+    {__LINE__, .src = "{% for x, else %}", .err = "Unexpected keyword [else] where an iteration variable name was expected"},
+    {__LINE__, .src = "{% for x, endif %}", .err = "Unexpected keyword [endif] where an iteration variable name was expected"},
+    {__LINE__, .src = "{% for x, endfor %}", .err = "Unexpected keyword [endfor] where an iteration variable name was expected"},
+
+    {__LINE__, .src = "{% for x, y in %}", .err = "Expression ended where a primary expression was expected"},
 
     {__LINE__, .src = "{% if 0 %}", .exp = ""},
     {__LINE__, .src = "{% if 0 %}{% endif %}", .exp = ""},
+
+    {__LINE__, .src = "{% if 0 %}x{% for x in [0] %}y{% if 0 %}z", .exp = ""},
 
     {__LINE__, "{%%}",    NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{% %}",   NULL, "block {% .. %} doesn't start with a keyword"},
@@ -194,42 +293,41 @@ int main()
 
         if(free_count != expected_free_count) {
 
-            fprintf(stderr, "Test %d: Failed\n"
+            fprintf(stderr, "Test %ld: Failed\n"
                             "\t%ld memory leaks detected\n", 
-                    i+1, expected_free_count - free_count);
+                    total, expected_free_count - free_count);
 
         } else if(exp == NULL && res == NULL) {
         
             // Test was expected to fail and it failed!
             
             if(!strcmp(err.message, exp_err)) {
-
-                fprintf(stderr, "Test %d: Passed\n", i+1);
+                fprintf(stderr, "Test %ld: Passed\n", total);
                 passed += 1;
             
             } else {
 
                 fprintf(stderr, 
-                    "Test %d: Failed\n"
+                    "Test %ld: Failed\n"
                     "\tTemplate:\n"
                     "\t\t%s\n"
                     "\tfailed with error:\n"
                     "\t\t%s\n"
                     "\tbut it was expected to fail with error:\n"
-                    "\t\t%s\n", i+1, src, err.message, exp_err);
+                    "\t\t%s\n", total, src, err.message, exp_err);
             }
 
         } else if(exp == NULL && res != NULL) {
             
             // Test was expected to fail but it didn't!
             fprintf(stderr, 
-                "Test %d: Failed\n"
+                "Test %ld: Failed\n"
                 "\tTemplate:\n"
                 "\t\t%s\n"
                 "\twas expected to fail with error:\n"
                 "\t\t%s\n"
                 "\tbut didn't. Instead, it rendered to:\n"
-                "\t\t%s\n", i+1, src, exp_err, res);
+                "\t\t%s\n", total, src, exp_err, res);
 
             free(res);
 
@@ -238,13 +336,13 @@ int main()
             // Test was expected to succeed but it didn't
 
             fprintf(stderr, 
-                "Test %d: Failed\n"
+                "Test %ld: Failed\n"
                 "\tTemplate:\n"
                 "\t\t%s\n"
                 "\tfailed. It should have rendered:\n"
                 "\t\t%s\n"
                 "\tThe reported error is:\n"
-                "\t\t%s\n", i+1, src, exp, err.message);
+                "\t\t%s\n", total, src, exp, err.message);
 
             free(res);
 
@@ -253,20 +351,19 @@ int main()
             assert(exp != NULL && res != NULL);
 
             if(!strcmp(exp, res)) {
-
-                fprintf(stderr, "Test %d: Passed\n", i);
+                fprintf(stderr, "Test %ld: Passed\n", total);
                 passed += 1;
             
             } else {
 
                 fprintf(stderr, 
-                    "Test %d: Failed\n"
+                    "Test %ld: Failed\n"
                     "\tTemplate:\n"
                     "\t\t%s\n"
                     "\tRendered:\n"
                     "\t\t%s\n"
                     "\tBut it should have rendered:\n"
-                    "\t\t%s\n", i+1, src, res, exp);
+                    "\t\t%s\n", total, src, res, exp);
             }
 
             free(res);
@@ -319,10 +416,10 @@ int main()
             if(free_count != alloc_count)
                 fprintf(stderr, 
                     "Test %ld: Failed\n"
-                    "Detected %ld memory leaks when an allocation failes at line %ld\n", 
-                    i+total+1, alloc_count-free_count, failing_line);
+                    "\tDetected %ld memory leaks when an allocation failes at line %ld\n", 
+                    total, alloc_count-free_count, failing_line);
             else {
-                fprintf(stderr, "Test %ld: Passed\n", i+total+1);
+                fprintf(stderr, "Test %ld: Passed\n", total);
                 passed += 1;
             }
 

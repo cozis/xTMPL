@@ -1,0 +1,1 @@
+rm test test-cov xtmpl *.gcda *.gcno *.gcov vgcore.*
