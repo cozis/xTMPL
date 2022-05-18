@@ -413,6 +413,7 @@ int main()
             
             total += 1;
             const char *src = tcases[i].src;
+            const char *exp_err = tcases[i].err;
 
 #ifdef PRINT_TEST_LINES
             fprintf(stderr, "(Line: %ld) ", tcases[i].line);
@@ -423,21 +424,42 @@ int main()
             XT_Error err;
             char *res = xt_render_str_to_str(src, -1, NULL, NULL, &err);
 
-            if(res != NULL)
-                free(res);
-
-            if(free_count != alloc_count)
-                fprintf(stderr, 
-                    "Test %ld: Failed\n"
-                    "\tDetected %ld memory leaks when an allocation failes at line %ld\n", 
-                    total, alloc_count-free_count, failing_line);
-            else {
-                fprintf(stderr, "Test %ld: Passed\n", total);
-                passed += 1;
-            }
 
             long expected_free_count = alloc_count;
             if(res != NULL) expected_free_count -= 1;
+
+            if(free_count != expected_free_count)
+                fprintf(stderr, 
+                    "Test %ld: Failed\n"
+                    "\tDetected %ld memory leaks when an allocation failes at line %ld\n", 
+                    total, expected_free_count-free_count, failing_line);
+            else {
+
+                const char *exp_err2 = "Out of memory";
+
+                if(res == NULL && exp_err != NULL) {
+                    if(strcmp(err.message, exp_err) && strcmp(err.message, exp_err2)) {
+
+                        fprintf(stderr, "Test %ld: Failed\n"
+                                        "\tExpected error was either:\n"
+                                        "\t\t%s\n"
+                                        "\t or:\n"
+                                        "\t\t%s\n"
+                                        "\tbut the actual reported error is:\n"
+                                        "\t\t%s\n", total, exp_err, exp_err2, err.message);
+
+                    } else {
+                        fprintf(stderr, "Test %ld: Passed\n", total);
+                        passed += 1;
+                    }
+                } else {
+                    fprintf(stderr, "Test %ld: Passed\n", total);
+                    passed += 1;
+                }
+            }
+
+            if(res != NULL)
+                free(res);
         }
     }
 
