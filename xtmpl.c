@@ -663,8 +663,6 @@ static bool parse_for_statement(const char *str, long len,
 
         memcpy(var1, str + key_var_off, key_var_len);
         var1[key_var_len] = '\0';
-
-        // TODO: Make sure "A" isn't a keyword.
     }
 
     // Skip spaces before "in" or ','
@@ -739,19 +737,24 @@ static bool parse_for_statement(const char *str, long len,
         }
 
         // Now the "in" keyword is expected
-        if(i+2 >= len 
-            || str[i]   != 'i' 
-            || str[i+1] != 'n' 
-            || isalpha(str[i+2]) 
-            ||  '_' == str[i+2]) {
-            // NOTE: This may trigger even if there is an
-            // [in] keyword but the statement ends after it.
-            // If that's true, it's not the ideal behaviour.
-            report(err, i, "Missing [in] keyword after iteration variable names");
+
+        if(!isalpha(str[i]) && str[i] != '_') {
+            report(err, i, "Missing [in] keyword after iteration variable name");
             return 0;
         }
 
-        i += 2; // Skip "in"
+        long kword_off = i;
+        do
+            i += 1;
+        while(i < len && (isalpha(str[i]) || isdigit(str[i]) || str[i] == '_'));
+        long kword_len = i - kword_off;
+
+        assert(kword_len > 0);
+
+        if(kword_len != 2 || str[kword_off] != 'i' || str[kword_off+1] != 'n') {
+            report(err, i, "Missing [in] keyword after iteration variable name");
+            return 0;
+        }
     }
 
     *coll_off = i;
@@ -895,7 +898,7 @@ static bool render(RenderContext *ctx, SliceKind until)
                 }
 
                 if(collection.kind != VK_ARRAY) {
-                    report(ctx->err, coll_off, "Interation subject isn't an array");
+                    report(ctx->err, coll_off, "Iteration subject isn't an array");
                     return 0;
                 }
 
@@ -959,8 +962,9 @@ static bool append_slice(Slices **slices, Slice slice)
 
     if(slices2->count == slices2->max_count) {
         
-        int new_max_count = (slices2->max_count == 0) 
-                          ? 32 : 2 * slices2->max_count;
+        assert(slices2->max_count > 0);
+
+        int new_max_count = 2 * slices2->max_count;
 
         void *temp = realloc(*slices, sizeof(Slices) + new_max_count * sizeof(Slice));
         if(temp == NULL)
@@ -990,13 +994,13 @@ static Slices *slice_up(const char *tmpl, long len, XT_Error *err)
             || tmpl[i+1] != (Y))) \
             i += 1;
 
-    Slices *slices = malloc(sizeof(Slices));
+    Slices *slices = malloc(sizeof(Slices) + 8 * sizeof(Slice));
     if(slices == NULL) {
         report(err, 0, "Out of memory");
         goto failed;
     }
     slices->count = 0;
-    slices->max_count = 0;
+    slices->max_count = 8;
 
     SliceKind context[MAX_DEPTH];
     bool     has_else[MAX_DEPTH];

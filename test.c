@@ -19,7 +19,7 @@
  *     comparison of allocation and deallocation count.
  */
 
-//#define PRINT_TEST_LINES
+#define PRINT_TEST_LINES
 
 static long alloc_count = 0;
 static long  free_count = 0;
@@ -92,6 +92,7 @@ struct {
     const char *exp;
     const char *err;
 } tcases[] = {
+    {__LINE__, .src = NULL, .exp = "", NULL},
     {__LINE__, "", "", NULL},
     {__LINE__, "Hello, world!", "Hello, world!", NULL},
     {__LINE__, "{{1}}", "1", NULL},
@@ -225,6 +226,8 @@ struct {
     {__LINE__, .src = "{% for x, %}", .err = "For statement ended unexpectedly"},
     {__LINE__, .src = "{% for x, @ %}", .err = "Missing second iteration variable name after ','"},
     
+    {__LINE__, .src = "{% for x, y %}", .err = "For statement ended unexpectedly" },
+    {__LINE__, .src = "{% for x, y @ %}", .err = "Missing [in] keyword after iteration variable name" },
     {__LINE__, .src = "{% for x, in %}", .err = "Unexpected keyword [in] where an iteration variable name was expected"},
     {__LINE__, .src = "{% for x, if %}", .err = "Unexpected keyword [if] where an iteration variable name was expected"},
     {__LINE__, .src = "{% for x, for %}", .err = "Unexpected keyword [for] where an iteration variable name was expected"},
@@ -233,11 +236,47 @@ struct {
     {__LINE__, .src = "{% for x, endfor %}", .err = "Unexpected keyword [endfor] where an iteration variable name was expected"},
 
     {__LINE__, .src = "{% for x, y in %}", .err = "Expression ended where a primary expression was expected"},
+    {__LINE__, .src = "{% for x, y iv %}", .err = "Missing [in] keyword after iteration variable name"},
+
+    {__LINE__, .src = "{% for x in 3 %}", .err = "Iteration subject isn't an array"},
+    {__LINE__, .src = "{% for x in [0, 0, 0] %}{{x}}", .exp = "012"},
+    {__LINE__, .src = "{% for x in [0] %}{% if %}", .err = "Expression ended where a primary expression was expected"},
 
     {__LINE__, .src = "{% if 0 %}", .exp = ""},
     {__LINE__, .src = "{% if 0 %}{% endif %}", .exp = ""},
-
+    {__LINE__, .src = "{% if 1 %}{% for %}", .err = "For statement ended unexpectedly"},
+    {__LINE__, .src = "{% if 0 %}{% else %}{% for %}", .err = "For statement ended unexpectedly"},
     {__LINE__, .src = "{% if 0 %}x{% for x in [0] %}y{% if 0 %}z", .exp = ""},
+
+    {
+        __LINE__, 
+        .src =  "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}"
+                "0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}0{{1}}",
+        .exp =  "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+                "010101010101"
+    },
 
     {__LINE__, "{%%}",    NULL, "block {% .. %} doesn't start with a keyword"},
     {__LINE__, "{% %}",   NULL, "block {% .. %} doesn't start with a keyword"},
