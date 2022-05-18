@@ -1220,7 +1220,7 @@ done:
     if(!ok && err && err->off >= 0) {
         // Calculate the line and column of the error
         // given the absolute offset and the string.
-        assert(err->off < len);
+        assert(err->off <= len);
 
         long col = 1, 
              row = 1;

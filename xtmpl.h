@@ -1,3 +1,5 @@
+#ifndef XTMPL_H
+#define XTMPL_H
 #include <stdbool.h>
 
 #define XT_ERRMSG_MAX 256
@@ -54,3 +56,4 @@ bool  xt_render_str_to_cb  (const char *str, long len, Variables *vars, xt_callb
 bool  xt_render_file_to_cb (const char *file,          Variables *vars, xt_callback callback, void *userp, XT_Error *err);
 char *xt_render_str_to_str (const char *str, long len, Variables *vars, long *outlen, XT_Error *err);
 char *xt_render_file_to_str(const char *file,          Variables *vars, long *outlen, XT_Error *err);
+#endif
